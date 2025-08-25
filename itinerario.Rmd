@@ -1,0 +1,32 @@
+---
+title: "Itinerario de Viaje Sudamérica 2025"
+output: pdf_document
+params:
+  etapas: NULL
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(dplyr)
+```
+
+```{r}
+etapas <- params$etapas
+
+etapas %>%
+  select(etapa, ciudad, fecha, descripcion, hotel) %>%
+  knitr::kable(caption = "Resumen del Itinerario", booktabs = TRUE)
+```
+
+```{r}
+for (i in 1:nrow(etapas)) {
+  cat("##", etapas$ciudad[i], "\n\n")
+  cat("**Fechas:**", etapas$fecha[i], "\n\n")
+  cat("**Descripción:**", etapas$descripcion[i], "\n\n")
+  if (!is.na(etapas$hotel[i])) {
+    cat("**Hotel:**", etapas$hotel[i], "\n\n")
+    cat("[Enlace hotel](", etapas$hotel_link[i], ")\n\n")
+  }
+  cat("[Wikipedia](", etapas$wikipedia[i], ")\n\n")
+}
+```

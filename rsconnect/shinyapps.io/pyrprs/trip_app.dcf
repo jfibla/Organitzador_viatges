@@ -1,0 +1,13 @@
+name: trip_app
+title: trip_app
+username: pyrprs
+account: pyrprs
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 15261497
+bundleId: 10815897
+url: https://pyrprs.shinyapps.io/trip_app/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE
+ignoredFiles: app0.R|app00.R|app2.R
