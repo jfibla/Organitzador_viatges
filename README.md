@@ -1,3 +1,5 @@
+[![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC_BY--NC_4.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc/4.0/)
+
 <h1>🗺️ GeoIntR: Travel Itinerary Geolocator</h1>
 <p>Multilingual <strong>Shiny</strong> application to visualize and optionally edit travel itineraries from an <strong>Excel file</strong>.<br>
 It displays trip stages (flights, car, train, boat, and visits) on an interactive map, overlays hotels and points of interest, supports filtering by day or type, and allows <strong>editing in table form</strong> with <strong>saving</strong> to a normalized Excel file in <code>www/</code>.</p>
