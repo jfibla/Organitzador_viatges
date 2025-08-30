@@ -220,3 +220,7 @@ It displays trip stages (flights, car, train, boat, and visits) on an interactiv
 
 <h2>📬 Support</h2>
 <p>If you encounter issues or have suggestions, open an <strong>issue</strong> in the repository or contact the maintainer.</p>
+<hr>
+
+<h2>📄 User guide</h2>
+📄 [Download the User Guide (PDF)](Travel_Itinerary_App_UserGuide.pdf)
