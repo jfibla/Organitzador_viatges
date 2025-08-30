@@ -223,5 +223,5 @@ It displays trip stages (flights, car, train, boat, and visits) on an interactiv
 <hr>
 
 <h2>📄 User guide</h2>
-📄 [Download the User Guide (PDF)](https://github.com/USERNAME/REPO/raw/main/Travel_Itinerary_App_UserGuide.pdf)
+📄 [Download the User Guide (PDF)](https://github.com/jfibla/Organitzador_viatges/raw/main/Travel_Itinerary_App_UserGuide.pdf)
 
