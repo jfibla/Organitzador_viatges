@@ -223,7 +223,7 @@ It displays trip stages (flights, car, train, boat, and visits) on an interactiv
 <hr>
 
 <h2>📄 User guide</h2>
-- 🇬🇧 [Download User Guide (EN)](https://github.com/jfibla/Organitzador_viatges/blob/main/Travel_Itinerary_App_UserGuide.pdf)
+- 🇬🇧 [Download User Guide (EN)](https://github.com/jfibla/Organitzador_viatges/raw/main/Travel_Itinerary_App_UserGuide_EN.pdf)
 - 🇨🇦 [Descarregar Guia d'Usuari (CA)](https://github.com/jfibla/Organitzador_viatges/raw/main/Travel_Itinerary_App_UserGuide_CA.pdf)
 - 🇪🇸 [Descargar Guía de Usuario (ES)](https://github.com/jfibla/Organitzador_viatges/main/Travel_Itinerary_App_UserGuide_ES.pdf)
 
