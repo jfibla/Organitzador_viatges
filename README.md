@@ -228,4 +228,8 @@ It displays trip stages (flights, car, train, boat, and visits) on an interactiv
   [Descarregar Guia d'Usuari (CA)](https://github.com/jfibla/Organitzador_viatges/raw/main/Travel_Itinerary_App_UserGuide_CA.pdf)
 <br>- 🇪🇸 [Descargar Guía de Usuario (ES)](https://github.com/jfibla/Organitzador_viatges/main/Travel_Itinerary_App_UserGuide_ES.pdf)
 
+## License
+
+This project is licensed under the [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0) license.
+
 
