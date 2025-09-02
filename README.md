@@ -173,6 +173,17 @@ shiny::runApp("app.R")
     <li><strong>Excel not recognized?</strong> Verify mandatory sheets exist (Places, Stages) and that column names map to the canonical ones listed above.</li>
   </ul>
 
+### Hosted demo
+
+You can try an interactive instance of **GeoItinR** here:
+
+**(https://pyrprs.shinyapps.io/trip_app/)**
+
+This server is meant for functionality testing and demos. Performance and availability may vary depending on server load. The demo uses the app’s default upload cap (configured in the code) and includes example datasets to explore the workflow quickly.
+
+---
+
+
   <h2>Acknowledgements</h2>
   <p>Built with R, Shiny, Leaflet, OpenStreetMap/Nominatim, OSRM, and Wikipedia/Wikidata. Thanks to their communities.</p>
 
