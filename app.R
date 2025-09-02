@@ -1,6 +1,6 @@
 # app.R — Geolocator (SIMPLE VERSION: ONLY "process" MODE)
 # Multilingual EN/CA/ES with live switching
-# Editing and geolocalization
+# Editing and geolocalization adjusted
 
 # =====================
 # Libraries
@@ -20,9 +20,11 @@ library(lubridate)
 library(rlang)
 library(httr2)
 library(tidygeocoder)
-library(tmaptools)   # <- needed for geocode_OSM
+library(tmaptools)   # geocode_OSM
 library(bslib)
 library(waiter)
+library(shinybusy)
+library(osmdata)
 
 `%||%` <- function(x, y) if (is.null(x) || length(x) == 0) y else x
 
@@ -34,9 +36,9 @@ i18n <- list(
     title = "Travel Itinerary Geolocator",
     btn_format = "Input format",
     btn_info = "Information",
-    from_disk = "From local disk (.xlsx)",
-    from_www  = "From 'www/' folder",
-    refresh   = "Refresh",
+    from_disk = "Load travel file (.xlsx)",
+    from_www  = "Load example file",
+    refresh   = "Select example file",
     load_sel  = "Load selected file",
     it_params = "Itinerary parameters",
     show_all  = "Show all stages",
@@ -46,7 +48,7 @@ i18n <- list(
     stage_detail = "Stage details",
     filter_by = "Filter by type:",
     types = c("Itinerary","Flights","Car","Train","Boat","Visit"),
-    save_changes = "Edit files",
+    save_changes = "Files to edit",
     file_name = "File name (without extension)",
     overwrite = "Overwrite if it already exists",
     save_to_www = "Save to memory and www/",
@@ -92,23 +94,27 @@ i18n <- list(
     err_write_www = "⚠️ Could not write to www/: ",
     fmt_modal_title = "Expected Excel format (multilingual)",
     close = "Close",
-    fmt_sheets = "<b>Excel document with 4 sheets:</b><br>
+    warn_no_info = "No data available on country visited",
+    fmt_sheets = "<b>Excel document with 5 sheets:</b><br>
 <ul>
-<li><b>Places</b>: <i>llocs</i> / <i>lugares</i> / <i>places</i></li> (mandatory)
-<li><b>Stages</b>: <i>etapes</i> / <i>etapas</i> / <i>stages</i></li> (mandatory)
-<li><b>Hotels</b>: <i>hotels</i> / <i>hoteles</i></li> (optional)
-<li><b>Interest</b>: <i>interes</i> / <i>interés</i> / <i>interests</i> / <i>interest</i> / <i>interesos</i></li> (optional)
+<li><b>Places</b>: <i>places</i> (mandatory)
+<li><b>Stages</b>: <i>stages</i> (mandatory)
+<li><b>Hotels</b>: <i>hotels</i> (optional)
+<li><b>Interest</b>: <i>interest</i> (optional)
+<li><b>Info</b>: <i>info</i> (optional)
 </ul>
-<b>Column names</b> (accepted synonyms ca/es/en).<br><br>
+<b>Column names</b><br><br>
 <b>Places</b>: place_id | city | country | lat | lon | wikipedia
-<br><br><b>Stages</b>: etapa | from_id | to_id | date | description | medi | ruta
+<br><b>Stages</b>: stage | from_id | to_id | date | description | transport | comments
 <br><b>Hotels</b>: place_id | hotel_name | hotel_link | details | hotel_lat | hotel_lon
-<br><b>Interest</b>: descriptor | lat | lon | city | country | details/observacio | type/tipus | link
-<br><br>Values for <i>medi</i>: flight/plane/vol/avió/avion, car/cotxe/coche, train/tren, boat/ferry/vaixell.
-<br>Values for <i>type</i>: art/culture/photo/photography/gastronomy/history/market/viewpoint/monument/museum/nature/landscape/panorama/park.",
+<br><b>Interest</b>: descriptor | lat | lon | city | country | details | type | link
+<br><b>info</b>: country | documentation | local_time | language | internet | plugs | currency
+<br><br><b>Values for <i>transport</i></b>: flight/plane, car, train, boat/ferry.
+<br><b>Values for <i>type</i></b>: art/culture/photo/photography/gastronomy/history/market/viewpoint
+    <br>/monument/museum/nature/landscape/panorama/park.",
     info_modal_title = "Relevant information about countries to visit",
-    ar_title = "ARGENTINA",
-    cl_title = "CHILE",
+  #  ar_title = "ARGENTINA",
+  #  cl_title = "CHILE",
     docu = "DOCUMENTATION",
     local_time = "LOCAL TIME",
     language = "LANGUAGE",
@@ -116,7 +122,7 @@ i18n <- list(
     plugs = "PLUGS",
     currency = "CURRENCY",
     none = "(none)",
-    
+    download_excel = "Download Excel",
     # Editing tools (EN)
     ed_tools_title   = "Editing tools",
     ed_auto_complete = "Auto-complete: coords + Wikipedia + hotels + interest",
@@ -146,9 +152,9 @@ i18n <- list(
     title = "Geolocalizador de Itinerario de Viaje",
     btn_format = "Formato de entrada",
     btn_info = "Información",
-    from_disk = "Desde disco local (.xlsx)",
-    from_www  = "Desde carpeta 'www/'",
-    refresh   = "Actualizar",
+    from_disk = "Cargar archivo del viaje (.xlsx)",
+    from_www  = "Cargar archivo de ejemplo",
+    refresh   = "Selecciona archivo de ejemplo",
     load_sel  = "Cargar archivo seleccionado",
     it_params = "Parámetros del itinerario",
     show_all  = "Mostrar todas las etapas",
@@ -158,7 +164,7 @@ i18n <- list(
     stage_detail = "Detalles de la etapa",
     filter_by = "Filtrar por tipo:",
     types = c("Itinerario","Vuelos","Coche","Tren","Barco","Visita"),
-    save_changes = "Editar archivos",
+    save_changes = "Archivos para editar",
     file_name = "Nombre de archivo (sin extensión)",
     overwrite = "Sobrescribir si ya existe",
     save_to_www = "Guardar en memoria y www/",
@@ -204,23 +210,27 @@ i18n <- list(
     err_write_www = "⚠️ No se pudo escribir en www/: ",
     fmt_modal_title = "Formato esperado del Excel (multilingüe)",
     close = "Cerrar",
-    fmt_sheets = "<b>Documento Excel con 4 hojas:</b><br>
+    warn_no_info = "No hay datos disponibles sobre los países visitados",
+    fmt_sheets = "<b>Documento Excel con 5 hojas:</b><br>
 <ul>
-<li><b>Places</b>: <i>llocs</i> / <i>lugares</i> / <i>places</i></li> (obligatoria)
-<li><b>Stages</b>: <i>etapes</i> / <i>etapas</i> / <i>stages</i></li> (obligatoria)
-<li><b>Hotels</b>: <i>hotels</i> / <i>hoteles</i></li> (opcional)
-<li><b>Interest</b>: <i>interes</i> / <i>interés</i> / <i>interests</i> / <i>interest</i> / <i>interesos</i></li> (opcional)
+<li><b>Places</b>: <i>lugares</i> (obligatoria)
+<li><b>Stages</b>: <i>etapas</i> (obligatoria)
+<li><b>Hotels</b>: <i>hoteles</i> (opcional)
+<li><b>Interest</b>: <i>interes</i> (opcional)
+<li><b>Info</b>: <i>info</i> (opcional)
 </ul>
-<b>Nombres de columnas</b> (se aceptan sinónimos en ca/es/en).<br><br>
-<b>Places</b>: place_id | city | country | lat | lon | wikipedia
-<br><br><b>Stages</b>: etapa | from_id | to_id | date | description | medi | ruta
-<br><b>Hotels</b>: place_id | hotel_name | hotel_link | details | hotel_lat | hotel_lon
-<br><b>Interest</b>: descriptor | lat | lon | city | country | details/observacio | type/tipus | link
-<br><br>Valores de <i>medi</i>: vuelo/avión/flight/plane/vol/avió/avion, coche/carro/cotxe/car, tren/train, barco/ferry/vaixell/ship/boat.
-<br>Valores de <i>type</i>: arte/cultura/foto/fotografía/gastronomía/historia/mercado/mirador/monumento/museo/naturaleza/paisaje/panorama/parque.",
+<b>Nombres de columnas</b><br><br>
+<b>Places</b>: place_id | ciudad | pais | lat | lon | wikipedia
+<br><b>Stages</b>: etapa | de_id | a_id | fecha | descripción | transporte | comentarios
+<br><b>Hotels</b>: lugar_id | hotel_nombre | hotel_enlace | detalles | hotel_lat | hotel_lon
+<br><b>Interest</b>: descriptor | lat | lon | ciudad | pais | observación | tipo | enlace
+<br><b>info</b>: país | documentación | hora_local | idiomas | internet | conectores | moneda
+<br><br><b>Valores de <i>transporte</i></b>: vuelo/avión, coche/carro, tren, barco/ferry.
+<br><b>Valores de <i>tipo</i></b>: arte/cultura/foto/fotografía/gastronomía/historia/mercado/mirador
+    <br>/monumento/museo/naturaleza/paisaje/panorama/parque.",
     info_modal_title = "Información relevante de los países a visitar",
-    ar_title = "ARGENTINA",
-    cl_title = "CHILE",
+  #  ar_title = "ARGENTINA",
+  #  cl_title = "CHILE",
     docu = "DOCUMENTACIÓN",
     local_time = "HORA LOCAL",
     language = "IDIOMA",
@@ -228,7 +238,7 @@ i18n <- list(
     plugs = "ENCHUFES",
     currency = "MONEDA",
     none = "(ninguno)",
-    
+    download_excel = "Descargar Excel",
     # Editing tools (ES)
     ed_tools_title   = "Herramientas de edición",
     ed_auto_complete = "Autocompletar: coords + Wikipedia + hoteles + interés",
@@ -258,9 +268,9 @@ i18n <- list(
     title = "Geolocalitzador d'Itinerari de Viatge",
     btn_format = "Format d'entrada",
     btn_info = "Informació",
-    from_disk = "Des de disc local (.xlsx)",
-    from_www  = "Des de la carpeta 'www/'",
-    refresh   = "Actualitza",
+    from_disk = "Carregar arxiu del viatge (.xlsx)",
+    from_www  = "Carregar arxiu d'exemple",
+    refresh   = "Selecciona arxiu d'exemple",
     load_sel  = "Carrega l'arxiu seleccionat",
     it_params = "Paràmetres de l'itinerari",
     show_all  = "Mostra totes les etapes",
@@ -270,7 +280,7 @@ i18n <- list(
     stage_detail = "Detalls de l'etapa",
     filter_by = "Filtra per tipus:",
     types = c("Itinerari","Vols","Cotxe","Tren","Vaixell","Visita"),
-    save_changes = "Editar arxius",
+    save_changes = "Arxius per editar",
     file_name = "Nom del fitxer (sense extensió)",
     overwrite = "Sobreescriure si ja existeix",
     save_to_www = "Desa en memòria i a www/",
@@ -316,23 +326,27 @@ i18n <- list(
     err_write_www = "⚠️ No s’ha pogut escriure a www/: ",
     fmt_modal_title = "Format esperat del Excel (multilingüe)",
     close = "Tancar",
-    fmt_sheets = "<b>Document Excel amb 4 fulls:</b><br>
+    warn_no_info = "No hi ha dades disponibles sobre els països visitats",
+    fmt_sheets = "<b>Document Excel amb 5 fulls:</b><br>
 <ul>
-<li><b>Places</b>: <i>llocs</i> / <i>lugares</i> / <i>places</i></li> (obligatori)
-<li><b>Stages</b>: <i>etapes</i> / <i>etapas</i> / <i>stages</i></li> (obligatori)
-<li><b>Hotels</b>: <i>hotels</i> / <i>hoteles</i></li> (opcional)
-<li><b>Interest</b>: <i>interes</i> / <i>interés</i> / <i>interests</i> / <i>interest</i> / <i>interesos</i></li> (opcional)
+<li><b>Places</b>: <i>llocs</i> (obligatoria)
+<li><b>Stages</b>: <i>etapes</i> (obligatoria)
+<li><b>Hotels</b>: <i>hotels</i> (opcional)
+<li><b>Interest</b>: <i>interes</i> (opcional)
+<li><b>Info</b>: <i>info</i> (opcional)
 </ul>
-<b>Noms de les columnes</b> (admet sinònims en ca/es/en).<br><br>
-<b>Places</b>: place_id | city | country | lat | lon | wikipedia
-<br><br><b>Stages</b>: etapa | from_id | to_id | date | description | medi | ruta
-<br><b>Hotels</b>: place_id | hotel_name | hotel_link | details | hotel_lat | hotel_lon
-<br><b>Interest</b>: descriptor | lat | lon | city | country | details/observacio | type/tipus | link
-<br><br>Valors de <i>medi</i>: vol/avió/avion/flight/plane, cotxe/coche/car, tren/train, vaixell/barco/ferry/ship/boat.
-<br>Valors de <i>type</i>: art/cultura/foto/fotografia/gastronomia/història/mercat/mirador/monument/museu/natura/paisatge/panoràmica/parc.",
+<b>Noms de les columnes</b><br><br>
+<b>Places</b>: place_id | ciutat | païs | lat | lon | wikipedia
+<br><b>Stages</b>: etapa | de_id | a_id | data | descripció | transport | comentaris
+<br><b>Hotels</b>: lloc_id | hotel_nom | hotel_enllaç | detalls | hotel_lat | hotel_lon
+<br><b>Interest</b>: descriptor | lat | lon | ciutat | païs | observació | tipus | enllaç
+<br><b>info</b>: païs | documentació | hora_local | idiomes | internet | conectors | moneda
+<br><br><b>Valors de <i>transport</i></b>: vol/avió, cotxe, tren, vaixell/ferry.
+<br><b>Valors de <i>tipus</i></b>: art/cultura/foto/fotografia/gastronomia/història/mercat/mirador
+    <br>/monument/museu/natura/paisatge/panoràmica/parc.",
     info_modal_title = "Informació rellevant dels països a visitar",
-    ar_title = "ARGENTINA",
-    cl_title = "XILE",
+   # ar_title = "ARGENTINA",
+   # cl_title = "XILE",
     docu = "DOCUMENTACIÓ",
     local_time = "HORA LOCAL",
     language = "IDIOMA",
@@ -340,7 +354,7 @@ i18n <- list(
     plugs = "ENDOLLS",
     currency = "MONEDA",
     none = "(cap)",
-    
+    download_excel = "Descarregar Excel",
     # Editing tools (CA)
     ed_tools_title   = "Eines d'edició",
     ed_auto_complete = "Autocompletar: coords + Viquipèdia + hotels + interès",
@@ -385,29 +399,13 @@ tr <- function(key, lang = .lang_default, data = NULL) {
 # =====================
 ui <- bslib::page_sidebar(
   tags$style(HTML("
-  /* Reduce sidebar font size */
   .sidebar, .bslib-sidebar, .sidebar .form-group, .sidebar label, .sidebar input, .sidebar select {
-    font-size: 1rem;   /* smaller text */
-  }
-
-  /* Optional: adjust headings in sidebar */
-  .sidebar h4, .bslib-sidebar h4 {
-    font-size: 1.2rem;      /* was ~1.25rem */
-    font-weight: 600;
-  }
-
-  .sidebar h5 {
-    font-size: 1.1rem;
-    font-weight: 500;
-  }
-
-  /* Make buttons text a bit smaller too */
-  .sidebar .btn {
     font-size: 1rem;
-    padding: 4px 8px;
   }
+  .sidebar h4, .bslib-sidebar h4 { font-size: 1.2rem; font-weight: 600; }
+  .sidebar h5 { font-size: 1.1rem; font-weight: 500; }
+  .sidebar .btn { font-size: 1rem; padding: 4px 8px; }
 ")),
-  
   theme = bslib::bs_theme(
     version = 5,
     bootswatch = "flatly",
@@ -415,9 +413,8 @@ ui <- bslib::page_sidebar(
     "font-size-root" = "0.8125rem"  # ~13px
   ),
   title = tr("title", .lang_default),
-  # -------- SIDEBAR: language + load + params + save --------
+  
   sidebar = bslib::sidebar(
-    # Language switcher
     div(class = "d-flex gap-2 mb-3",
         actionButton("lang_en", "EN", class = "btn-outline-secondary btn-sm"),
         actionButton("lang_ca", "CA", class = "btn-outline-secondary btn-sm"),
@@ -430,7 +427,6 @@ ui <- bslib::page_sidebar(
   
   waiter::useWaiter(),
   
-  # -------- MAIN CONTENT --------
   h3(textOutput("stage_details_title")),
   fluidRow(
     column(6,
@@ -470,7 +466,8 @@ ui <- bslib::page_sidebar(
           bslib::nav_panel(title = textOutput("tab_places_title"),   value = "places",   DTOutput("places_table")),
           bslib::nav_panel(title = textOutput("tab_stages_title"),   value = "stages",   DTOutput("stages_table")),
           bslib::nav_panel(title = textOutput("tab_hotels_title"),   value = "hotels",   DTOutput("hotels_table")),
-          bslib::nav_panel(title = textOutput("tab_interest_title"), value = "interest", DTOutput("interes_table"))
+          bslib::nav_panel(title = textOutput("tab_interest_title"), value = "interest", DTOutput("interes_table")),
+          bslib::nav_panel(title = textOutput("tab_info_title"),     value = "info",     DTOutput("info_table"))  # <- NOVA
         )
       ),
       conditionalPanel(
@@ -480,7 +477,6 @@ ui <- bslib::page_sidebar(
     )
   ),
   
-  # Styles
   tags$head(
     tags$style(HTML('
       .form-control, .selectize-input, .btn { font-size: 16px; }
@@ -500,6 +496,182 @@ ui <- bslib::page_sidebar(
 # SERVER
 # =====================
 server <- function(input, output, session) {
+  
+  # ---- Timeout configuration ----
+  options(timeout = 10)  # base R
+  options(osmdata_timeout = 6)  # internal HTTP request timeout for osmdata
+
+  # ---- Set fast Overpass mirror (optional) ----
+  try(osmdata::set_overpass_url("https://overpass.kumi.systems/api/interpreter"), silent = TRUE)
+  
+  # ---- Define empty trip data structure ----
+  empty_td <- function() {
+    list(
+      places = tibble::tibble(
+        place_id = character(), ciudad = character(), pais = character(),
+        lat = numeric(), lon = numeric(), wikipedia = character()
+      ),
+      stages = tibble::tibble(
+        etapa = character(), from_id = character(), to_id = character(),
+        date = as.character(character()), description = character(),
+        medi = character(), ruta = character(), modo = character()
+      ),
+      hotels = tibble::tibble(
+        place_id = character(), hotel_name = character(), hotel_link = character(),
+        details = character(), hotel_lat = numeric(), hotel_lon = numeric(),
+        ciudad = character(), pais = character()
+      ),
+      interes = tibble::tibble(
+        descriptor = character(), lat = numeric(), lon = numeric(),
+        ciudad = character(), pais = character(),
+        observacio = character(), tipus = character(), link = character()
+      ),
+      info = tibble::tibble(      # formato interno “tidy” que ya consume tu modal
+        country = character(), field = character(),
+        en = character(), es = character(), ca = character()
+      )
+    )
+  }
+  
+  # ---- Reactive trip data ----
+  trip_data <- reactiveVal(empty_td())
+  current_td <- reactive(trip_data())
+  
+  # Convert INFO table to wide format with automatic language priority (en > es > ca)
+  info_to_wide <- function(df) {
+    if (is.null(df) || !nrow(df)) return(NULL)
+    nms <- tolower(trimws(names(df)))
+    names(df) <- nms
+    
+    # If tidy format: country | field | en/es/ca
+    if (all(c("country","field") %in% nms) && any(c("en","es","ca") %in% nms)) {
+      value <- dplyr::coalesce(df$en, df$es, df$ca)  # preference: en → es → ca
+      tmp <- tibble::tibble(
+        country = df$country,
+        field   = toupper(trimws(as.character(df$field))),
+        value   = value
+      )
+      wide <- tidyr::pivot_wider(tmp, names_from = field, values_from = value)
+    } else {
+      # Already wide format: harmonize column names
+      names(df)[grepl("^documen", names(df))]   <- "documentation"
+      names(df)[grepl("^local[_ ]?tim", names(df))] <- "local_time"
+      names(df)[grepl("^language", names(df))]  <- "language"
+      names(df)[grepl("^internet", names(df))]  <- "internet"
+      names(df)[grepl("^plugs", names(df))]     <- "plugs"
+      names(df)[grepl("^currency", names(df))]  <- "currency"
+      wide <- df
+    }
+    
+    # Final column order and headers
+    need <- c("country","DOCUMENTATION","LOCAL_TIME","LANGUAGE","INTERNET","PLUGS","CURRENCY")
+    names(wide) <- ifelse(tolower(names(wide)) == "country", "country", toupper(names(wide)))
+    for (nm in need) if (!nm %in% names(wide)) wide[[nm]] <- NA_character_
+    wide[, need]
+  }
+  
+  info_to_wide_lang <- function(df, lcode = "en") {
+    # Returns the INFO table in wide format using the language column specified by lcode
+    if (is.null(df) || !nrow(df)) {
+      return(data.frame(
+        country = character(),
+        DOCUMENTATION = character(), LOCAL_TIME = character(), LANGUAGE = character(),
+        INTERNET = character(), PLUGS = character(), CURRENCY = character()
+      ))
+    }
+    nms <- tolower(trimws(names(df)))
+    if (all(c("country","field") %in% nms) && any(c("en","es","ca") %in% nms)) {
+      col <- if (lcode %in% c("en","es","ca")) lcode else "en"
+      tmp <- tibble::tibble(
+        country = df$country,
+        field   = toupper(trimws(as.character(df$field))),
+        value   = as.character(df[[col]])
+      )
+      wide <- tidyr::pivot_wider(tmp, names_from = field, values_from = value)
+    } else {
+      wide <- df
+    }
+    names(wide) <- ifelse(tolower(names(wide)) == "country", "country", toupper(names(wide)))
+    need <- c("country","DOCUMENTATION","LOCAL_TIME","LANGUAGE","INTERNET","PLUGS","CURRENCY")
+    for (nm in need) if (!nm %in% names(wide)) wide[[nm]] <- NA_character_
+    wide[, need]
+  }
+  
+  
+  build_trip_xlsx <- function(td, lang_code = "en") {
+    # --- places ---
+    places <- td$places
+    if (!"wikipedia" %in% names(places)) places$wikipedia <- NA_character_
+    if (!"ciudad" %in% names(places) && "city" %in% names(places)) places$ciudad <- places$city
+    if (!"pais"   %in% names(places) && "country" %in% names(places)) places$pais   <- places$country
+    places$lat <- suppressWarnings(as.numeric(places$lat))
+    places$lon <- suppressWarnings(as.numeric(places$lon))
+    places_out <- places |>
+      dplyr::rename(city = ciudad, country = pais) |>
+      dplyr::select(place_id, city, country, lat, lon, wikipedia)
+    
+    # --- stages ---
+    st <- td$stages
+    desc_vec <- col_first_existing(st, c("description","descripció","descripción"))
+    medi_vec <- col_first_existing(st, c("medi","modo"))
+    ruta_vec <- col_first_existing(st, c("ruta","route","trayecto","trajeto","route_desc","ruta_text"))
+    for (nm in c("etapa","from_id","to_id","date")) if (!nm %in% names(st)) st[[nm]] <- NA
+    stages_out <- st |>
+      dplyr::mutate(description = desc_vec, medi = medi_vec, ruta = ruta_vec) |>
+      dplyr::select(etapa, from_id, to_id, date, description, medi, ruta)
+    
+    # --- hotels ---
+    hotels_out <- NULL
+    if (!is.null(td$hotels) && nrow(td$hotels)) {
+      h <- td$hotels
+      for (nm in c("hotel_name","hotel_link","details","hotel_lat","hotel_lon"))
+        if (!nm %in% names(h)) h[[nm]] <- if (grepl("_lat$|_lon$", nm)) NA_real_ else NA_character_
+      h$hotel_lat <- suppressWarnings(as.numeric(h$hotel_lat))
+      h$hotel_lon <- suppressWarnings(as.numeric(h$hotel_lon))
+      hotels_out <- h |> dplyr::select(place_id, hotel_name, hotel_link, details, hotel_lat, hotel_lon)
+    }
+    
+    # --- interest ---
+    interes_out <- NULL
+    if (!is.null(td$interes) && nrow(td$interes)) {
+      inter <- td$interes
+      for (nm in c("descriptor","ciudad","pais","lat","lon","tipus","link","observacio"))
+        if (!nm %in% names(inter)) inter[[nm]] <- NA
+      inter$lat <- suppressWarnings(as.numeric(inter$lat))
+      inter$lon <- suppressWarnings(as.numeric(inter$lon))
+      interes_out <- inter |> dplyr::select(descriptor, ciudad, pais, lat, lon, tipus, link, observacio)
+    }
+    
+    # --- info (force wide) ---
+    info_out <- NULL
+    if (!is.null(td$info) && nrow(td$info)) info_out <- info_to_wide(td$info)
+    
+    Filter(Negate(is.null), list(
+      places  = places_out,
+      stages  = stages_out,
+      hotels  = hotels_out,
+      interes = interes_out,
+      info    = info_out   # wide
+    ))
+  }
+  
+
+  # === download handler ===
+output$download_itinerary_proc <- downloadHandler(
+  filename = function() {
+    base <- input$www_filename_proc %||% "itinerary_view"
+    base <- gsub("[^[:alnum:]_\\x2D ]+", "_", trimws(base))
+    paste0(base, ".xlsx")
+  },
+  content = function(file) {
+    td <- current_td(); if (is.null(td)) stop("No data loaded")
+    # construye payload y BLINDA info en ancho
+    payload <- build_trip_xlsx(td)
+    if (!is.null(td$info) && nrow(td$info)) payload$info <- info_to_wide(td$info)
+    writexl::write_xlsx(payload, path = file)
+  }
+)
+  
   # Preserve map view (zoom/center)
   view_state <- reactiveValues(center = NULL, zoom = NULL)
   observe({
@@ -557,119 +729,213 @@ server <- function(input, output, session) {
     if (length(idx)) idx[1] else NA_integer_
   }
   
-  # Active dataset
-  trip_data <- reactiveVal(NULL)
-  current_td <- reactive(trip_data())
   
   # Excel read + normalization
-  .sheet_aliases <- list(
-    places = c("llocs","lugares","places"),
-    stages = c("etapes","etapas","stages"),
-    hotels = c("hotels","hoteles"),
-    interes = c("interes","interés","interests","interest","interesos")
+  SHEET_ALIASES <- list(
+    places  = c("places","lugares","llocs"),
+    stages  = c("stages","etapas","etapes"),
+    hotels  = c("hotels","hoteles","hotels"),
+    interest= c("interest","interes","interès","interesos"),
+    info    = c("info")
   )
-  read_trip_data <- function(path) {
-    all <- readxl::excel_sheets(path)
-    find_sheet <- function(aliases) {
-      s_low <- tolower(all)
-      for (al in aliases) { hit <- which(s_low == al); if (length(hit)) return(all[hit[1]]) }
-      NA_character_
+  
+  # Maps of SYNONYMS -> INTERNAL CANONICAL NAME
+  # Internally I keep these names:
+  # places:  place_id, ciudad, pais, lat, lon, wikipedia
+  # stages:  etapa, from_id, to_id, date, description, medi, ruta
+  # hotels:  place_id, hotel_name, hotel_link, details, hotel_lat, hotel_lon
+  # interest: descriptor, lat, lon, ciudad, pais, observacio, tipus, link
+  COL_ALIASES <- list(
+    places = list(
+      place_id = c("place_id","lloc_id","lugar_id"),
+      ciudad   = c("ciudad","city","ciutat"),
+      pais     = c("pais","país","country"),
+      lat      = c("lat","latitude"),
+      lon      = c("lon","long","lng","longitude"),
+      wikipedia= c("wikipedia","wiki")
+    ),
+    stages = list(
+      etapa       = c("etapa","stage"),
+      from_id     = c("from_id","de_id"),
+      to_id       = c("to_id","a_id"),
+      date        = c("date","fecha","data"),
+      description = c("description","descripción","descripció","descripcion"),
+      medi        = c("medi","medio","mode","modo","transport"),  # <- transport -> medi
+      ruta        = c("ruta","route","trayecto","trajeto","route_desc","ruta_text","comments","comentarios","comentaris")  # <- comments -> ruta
+    ),
+    hotels = list(
+      place_id   = c("place_id","lloc_id","lugar_id"),
+      hotel_name = c("hotel_name","hotel_nom","hotel_nombre","name"),
+      hotel_link = c("hotel_link","hotel_enlace","hotel_enllaç","link","url"),
+      details    = c("details","detalles","detalls","notes","notas"),
+      hotel_lat  = c("hotel_lat","lat","latitude"),
+      hotel_lon  = c("hotel_lon","lon","long","lng","longitude")
+    ),
+    interest = list(
+      descriptor = c("descriptor","name","title","títol","titulo"),
+      lat        = c("lat","latitude"),
+      lon        = c("lon","long","lng","longitude"),
+      ciudad     = c("ciudad","city","ciutat"),
+      pais       = c("pais","país","country"),
+      observacio = c("observacio","observación","observacion","observació","details","detail","note","notes","observación/notes"),
+      tipus      = c("tipus","tipo","type"),
+      link       = c("link","enlace","enllaç","url")
+    ),
+    info = list(
+      country       = c("country","pais","país"),
+      documentation = c("documentation","documentacion","documentación","documentacio","documentació"),
+      local_time    = c("local_time","local time","hora_local","hora local"),
+      language      = c("language","idioma","llengua"),
+      internet      = c("internet"),
+      plugs         = c("plugs","enchufes","endolls"),
+      currency      = c("currency","moneda")
+    )
+  )
+  
+  # Find the first existing column name and rename it to the canonical one
+  rename_cols_canonical <- function(df, alias_map) {
+    if (is.null(df) || !ncol(df)) return(df)
+    nms <- tolower(trimws(names(df)))
+    names(df) <- nms
+    for (canon in names(alias_map)) {
+      alts <- tolower(alias_map[[canon]])
+      hit  <- which(nms %in% alts)
+      if (length(hit)) {
+        names(df)[hit[1]] <- canon
+        nms[hit[1]] <- canon
+      }
     }
-    sh_places  <- find_sheet(.sheet_aliases$places)
-    sh_stages  <- find_sheet(.sheet_aliases$stages)
-    sh_hotels  <- find_sheet(.sheet_aliases$hotels)
-    sh_interes <- find_sheet(.sheet_aliases$interes)
-    stopifnot(!is.na(sh_places), !is.na(sh_stages))
-    
-    places <- readxl::read_excel(path, sheet = sh_places)
-    names(places) <- tolower(trimws(names(places)))
-    if (!"place_id" %in% names(places)) names(places)[names(places) %in% c("lloc_id","lugar_id")] <- "place_id"
-    if (!"city"     %in% names(places)) names(places)[names(places) %in% c("ciutat","ciudad")] <- "city"
-    if (!"country"  %in% names(places)) names(places)[names(places) %in% c("pais","país")] <- "country"
-    if (!"wikipedia"%in% names(places)) places$wikipedia <- NA_character_
-    places$lat <- suppressWarnings(as.numeric(places$lat))
-    places$lon <- suppressWarnings(as.numeric(places$lon))
-    places <- places |> dplyr::rename(ciudad = city, pais = country)
-    
-    stages <- readxl::read_excel(path, sheet = sh_stages)
-    names(stages) <- tolower(trimws(names(stages)))
-    rn <- function(alts, to) if (any(alts %in% names(stages))) names(stages)[match(alts[alts %in% names(stages)][1], names(stages))] <<- to
-    rn(c("etapa","stage"), "etapa")
-    rn(c("de_id","from_id"), "from_id")
-    rn(c("a_id","to_id"),   "to_id")
-    rn(c("data","fecha","date"), "date")
-    rn(c("descripció","descripción","description"), "description")
-    rn(c("medi","medio","mode","modo"), "medi")
-    rn(c("ruta","route","trayecto","trajeto","route_desc","ruta_text"), "ruta")
-    if (!"ruta" %in% names(stages)) stages$ruta <- NA_character_
-    
-    hotels <- if (!is.na(sh_hotels)) {
-      h <- readxl::read_excel(path, sheet = sh_hotels)
-      names(h) <- tolower(trimws(names(h)))
-      if (!"place_id"   %in% names(h)) names(h)[names(h) %in% c("lloc_id","lugar_id")] <- "place_id"
-      if (!"hotel_name" %in% names(h)) names(h)[names(h) %in% c("hotel_nom","hotel_nombre","name")] <- "hotel_name"
-      if (!"hotel_link" %in% names(h)) names(h)[names(h) %in% c("link","url")] <- "hotel_link"
-      if (!"details"    %in% names(h)) names(h)[names(h) %in% c("detalls","detalles","notes","notas")] <- "details"
-      if (!"hotel_lat"  %in% names(h)) h$hotel_lat <- NA_real_
-      if (!"hotel_lon"  %in% names(h)) h$hotel_lon <- NA_real_
-      h$hotel_lat <- suppressWarnings(as.numeric(h$hotel_lat))
-      h$hotel_lon <- suppressWarnings(as.numeric(h$hotel_lon))
-      h <- dplyr::left_join(h, places |> dplyr::select(place_id, ciudad, pais), by = "place_id")
-      h
-    } else NULL
-    
-    interes <- if (!is.na(sh_interes)) {
-      inter <- readxl::read_excel(path, sheet = sh_interes)
-      names(inter) <- tolower(trimws(names(inter)))
-      if (!"descriptor"%in% names(inter)) names(inter)[names(inter) %in% c("name","title")] <- "descriptor"
-      if (!"ciudad"    %in% names(inter)) names(inter)[names(inter) %in% c("city","ciutat")] <- "ciudad"
-      if (!"pais"      %in% names(inter)) names(inter)[names(inter) %in% c("country","país")] <- "pais"
-      if (!"tipus"     %in% names(inter)) names(inter)[names(inter) %in% c("tipo","type")] <- "tipus"
-      if (!"observacio"%in% names(inter)) names(inter)[names(inter) %in% c("observació","observacion","observación","details","note","notes")] <- "observacio"
-      if (!"link"      %in% names(inter)) names(inter)[names(inter) %in% c("enllaç","enlace","url")] <- "link"
-      if (!"lat"       %in% names(inter)) inter$lat <- NA_real_
-      if (!"lon"       %in% names(inter)) inter$lon <- NA_real_
-      inter$lat <- suppressWarnings(as.numeric(inter$lat))
-      inter$lon <- suppressWarnings(as.numeric(inter$lon))
-      inter
-    } else NULL
-    
-    list(places = places, stages = stages, hotels = hotels, interes = interes)
+    df
   }
   
-  # Sidebar (localized)
-  output$sidebar_text_blocks_xxx <- renderUI({
-    l <- lang()
-    tagList(
-      fluidRow(
-        column(6, actionButton("show_format", tr("btn_format", l))),
-        column(6, actionButton("show_info",   tr("btn_info",   l)))
-      ),
-      h5(tr("from_disk", l)),
-      fileInput("proc_trip_file", NULL, accept = c(".xlsx", ".xls")),
-      h5(tr("from_www", l)),
-      fluidRow(
-        column(12, actionButton("proc_refresh_www", tr("refresh", l), class = "btn-secondary w-100 mb-2")),
-        column(12, selectInput("proc_trip_www", "", choices = c(tr("none", l))))
-      ),
-      actionButton("proc_load_www", tr("load_sel", l), class = "btn-primary w-100"),
-      tags$hr(),
+  # Find a sheet by its alias
+  find_sheet_by_alias <- function(all_sheets, aliases) {
+    s_low <- tolower(all_sheets)
+    for (al in aliases) {
+      idx <- which(s_low == al)
+      if (length(idx)) return(all_sheets[idx[1]])
+    }
+    NA_character_
+  }
+  
+  read_trip_data <- function(path) {
+    all <- readxl::excel_sheets(path)
+    
+    sh_places  <- find_sheet_by_alias(all, SHEET_ALIASES$places)
+    sh_stages  <- find_sheet_by_alias(all, SHEET_ALIASES$stages)
+    sh_hotels  <- find_sheet_by_alias(all, SHEET_ALIASES$hotels)
+    sh_interest<- find_sheet_by_alias(all, SHEET_ALIASES$interest)
+    sh_info    <- find_sheet_by_alias(all, SHEET_ALIASES$info)
+    
+    if (is.na(sh_places) || is.na(sh_stages)) {
+      stop("Excel must include mandatory sheets: Places & Stages (any of: EN/ES/CA names).")
+    }
+    
+    # ---- PLACES ----
+    places <- readxl::read_excel(path, sheet = sh_places)
+    places <- rename_cols_canonical(places, COL_ALIASES$places)
+    # Complete required/frequent columns
+    for (nm in c("place_id","ciudad","pais","lat","lon","wikipedia")) {
+      if (!nm %in% names(places)) places[[nm]] <- if (nm %in% c("lat","lon")) NA_real_ else NA_character_
+    }
+    places$lat <- suppressWarnings(as.numeric(places$lat))
+    places$lon <- suppressWarnings(as.numeric(places$lon))
+    
+    # ---- STAGES ----
+    stages <- readxl::read_excel(path, sheet = sh_stages)
+    stages <- rename_cols_canonical(stages, COL_ALIASES$stages)
+    for (nm in c("etapa","from_id","to_id","date","description","medi","ruta")) {
+      if (!nm %in% names(stages)) stages[[nm]] <- NA
+    }
+    
+    if (!is.data.frame(stages)) {
+      if (inherits(stages, "Date") || is.atomic(stages)) {
+        stages <- tibble::tibble(date = stages)
+      } else {
+        stages <- tibble::as_tibble(stages)
+      }
+    } else {
+      stages <- tibble::as_tibble(stages)
+    }
+    names(stages) <- make.unique(names(stages), sep = "__dup")
+    for (nm in c("etapa","from_id","to_id","date","description","medi","ruta","modo"))
+      if (!nm %in% names(stages)) stages[[nm]] <- NA
+    # Resolve medium/mode without duplicates:
+    if ("medi" %in% names(stages) && "modo" %in% names(stages)) {
+      stages$modo <- dplyr::coalesce(as.character(stages$modo), as.character(stages$medi))
+      stages$medi <- NULL
+    } else if ("medi" %in% names(stages)) {
+      names(stages)[names(stages) == "medi"] <- "modo"
+    }
+    
+    
+    # ---- HOTELS (optional) ----
+    hotels <- NULL
+    if (!is.na(sh_hotels)) {
+      hotels <- readxl::read_excel(path, sheet = sh_hotels)
+      hotels <- rename_cols_canonical(hotels, COL_ALIASES$hotels)
+      for (nm in c("place_id","hotel_name","hotel_link","details","hotel_lat","hotel_lon")) {
+        if (!nm %in% names(hotels)) hotels[[nm]] <- if (nm %in% c("hotel_lat","hotel_lon")) NA_real_ else NA_character_
+      }
+      hotels$hotel_lat <- suppressWarnings(as.numeric(hotels$hotel_lat))
+      hotels$hotel_lon <- suppressWarnings(as.numeric(hotels$hotel_lon))
+      # Add city/country via places (useful for popups)
+      hotels <- dplyr::left_join(hotels, places[, c("place_id","ciudad","pais")], by = "place_id")
+    }
+    
+    # ---- INTEREST (optional) ----
+    interes <- NULL
+    if (!is.na(sh_interest)) {
+      interes <- readxl::read_excel(path, sheet = sh_interest)
+      interes <- rename_cols_canonical(interes, COL_ALIASES$interest)
+      for (nm in c("descriptor","lat","lon","ciudad","pais","observacio","tipus","link")) {
+        if (!nm %in% names(interes)) interes[[nm]] <- NA
+      }
+      interes$lat <- suppressWarnings(as.numeric(interes$lat))
+      interes$lon <- suppressWarnings(as.numeric(interes$lon))
+    }
+    
+    info_df <- NULL
+    if (!is.na(sh_info)) {
+      raw <- readxl::read_excel(path, sheet = sh_info)
+      names(raw) <- tolower(trimws(names(raw)))
       
-      # --- this block will reappear only when not editing ---
-      uiOutput("itinerary_controls"),
+      has_wide <- all(c("documentation","local_time","language","internet","plugs","currency") %in% names(raw))
+      has_tidy <- all(c("country","field") %in% names(raw)) && any(c("en","es","ca") %in% names(raw))
       
-      # --- always visible ---
-      checkboxInput("allow_edit_process", tr("allow_edit", l), value = FALSE),
-      
-      tags$hr(),
-      h4(tr("save_changes", l)),
-      textInput("www_filename_proc", tr("file_name", l), value = "itinerary_view"),
-      checkboxInput("overwrite_www_proc", tr("overwrite", l), value = FALSE),
-      actionButton("save_places_proc", tr("save_to_www", l), class = "btn-warning w-100"),
-      br(), br(),
-      helpText(tr("tip_edit", l))
-    )
-  })
+      if (has_tidy) {
+        # already in tidy -> normalize columns
+        for (lng in c("en","es","ca")) if (!lng %in% names(raw)) raw[[lng]] <- NA_character_
+        raw$field <- toupper(trimws(as.character(raw$field)))
+        info_df <- raw[, c("country","field","en","es","ca")]
+      } else if (has_wide) {
+        # width -> a tidy (memory)
+        tmp <- tidyr::pivot_longer(
+          raw,
+          cols = c(documentation, local_time, language, internet, plugs, currency),
+          names_to = "field", values_to = "en"
+        )
+        tmp$field   <- toupper(tmp$field)
+        tmp$es <- tmp$en; tmp$ca <- tmp$en  # fallback
+        info_df <- tmp[, c("country","field","en","es","ca")]
+      }
+    }
+    return(list(
+      places  = places,
+      stages  = stages,
+      hotels  = hotels,
+      interes = interes,
+      info    = info_df
+    ))
+    
+  }
+  
+  warn_if_no_info <- function(td) {
+    if (is.null(td$info) || !nrow(td$info)) {
+      showNotification(tr("warn_no_info", lang()), type = "warning", duration = 6)
+    }
+  }
+  
   
   output$sidebar_text_blocks <- renderUI({
     l <- lang()
@@ -700,12 +966,9 @@ server <- function(input, output, session) {
           tr("file_name", l),
           value = input$www_filename_proc %||% "itinerary_view"
         ),
-        checkboxInput(
-          "overwrite_www_proc",
-          tr("overwrite", l),
-          value = isTRUE(input$overwrite_www_proc)
-        ),
-        actionButton("save_places_proc", tr("save_to_www", l), class = "btn-warning w-100"),
+        # REMOVE: checkboxInput("overwrite_www_proc", ...),
+        # REMOVE: actionButton("save_places_proc", ...),
+        downloadButton("download_itinerary_proc", tr("download_excel", l), class = "btn btn-warning w-100"),
         br(), br(),
         helpText(tr("tip_edit", l))
       )
@@ -720,7 +983,7 @@ server <- function(input, output, session) {
         ),
         h5(tr("from_disk", l)),
         fileInput("proc_trip_file", NULL, accept = c(".xlsx", ".xls")),
-        h5(tr("from_www", l)),
+        # h5(tr("from_www", l)),
         fluidRow(
           column(12, actionButton("proc_refresh_www", tr("refresh", l),
                                   class = "btn-secondary w-100 mb-2")),
@@ -736,12 +999,9 @@ server <- function(input, output, session) {
           tr("file_name", l),
           value = input$www_filename_proc %||% "itinerary_view"
         ),
-        checkboxInput(
-          "overwrite_www_proc",
-          tr("overwrite", l),
-          value = isTRUE(input$overwrite_www_proc)
-        ),
-        actionButton("save_places_proc", tr("save_to_www", l), class = "btn-warning w-100"),
+        # REMOVE: checkboxInput("overwrite_www_proc", ...),
+        # REMOVE: actionButton("save_places_proc", ...),
+        downloadButton("download_itinerary_proc", tr("download_excel", l), class = "btn btn-warning w-100"),
         br(), br(),
         helpText(tr("tip_edit", l))
       )
@@ -770,84 +1030,6 @@ server <- function(input, output, session) {
     )
   })
   
-  output$sidebar_text_blocks_xxx <- renderUI({
-    l <- lang()
-    # When editing is ON: show a *minimal* panel so you can toggle it off and still save/filter
-    if (isTRUE(input$allow_edit_process)) {
-      return(tagList(
-        h4(tr("it_params", l)),
-        checkboxInput("allow_edit_process", tr("allow_edit", l), value = TRUE),  # <-- keep this visible!
-        checkboxInput("ver_todas", tr("show_all", l), value = input$ver_todas %||% FALSE),
-        checkboxInput("show_hotels_on_map", tr("show_hotels_map", l), value = input$show_hotels_on_map %||% TRUE),
-        
-        h4(tr("stage_detail", l)),
-        selectInput("filtro_tipo", tr("filter_by", l),
-                    choices = tr("types", l),
-                    selected = input$filtro_tipo %||% tr("types", l)[1]),
-        
-        tags$hr(),
-        h4(tr("save_changes", l)),
-        textInput("www_filename_proc", tr("file_name", l), value = input$www_filename_proc %||% "itinerary_view"),
-        checkboxInput("overwrite_www_proc", tr("overwrite", l), value = isTRUE(input$overwrite_www_proc)),
-        actionButton("save_places_proc", tr("save_to_www", l), class = "btn-warning w-100"),
-        
-        br(), helpText(tr("tip_edit", l))
-      ))
-    }
-    
-    # When editing is OFF: show the full utilities block (upload, www picker, info/format, etc.)
-    tagList(
-      fluidRow(
-        column(6, actionButton("show_format", tr("btn_format", l))),
-        column(6, actionButton("show_info",   tr("btn_info",   l)))
-      ),
-      h5(tr("from_disk", l)),
-      fileInput("proc_trip_file", NULL, accept = c(".xlsx", ".xls")),
-      
-      h5(tr("from_www", l)),
-      fluidRow(
-        column(12, actionButton("proc_refresh_www", tr("refresh", l), class = "btn-secondary w-100 mb-2")),
-        column(12, selectInput("proc_trip_www", "", choices = c(tr("none", l))))
-      ),
-      actionButton("proc_load_www", tr("load_sel", l), class = "btn-primary w-100"),
-      
-      tags$hr(),
-    #  h4(tr("it_params", l)),
-    #  checkboxInput("ver_todas", tr("show_all", l), value = input$ver_todas %||% FALSE),
-    #  checkboxInput("show_hotels_on_map", tr("show_hotels_map", l), value = input$show_hotels_on_map %||% TRUE),
-    #  checkboxInput("allow_edit_process", tr("allow_edit", l), value = FALSE),
-    #  
-    #  h4(tr("stage_detail", l)),
-    #  selectInput("filtro_tipo", tr("filter_by", l),
-    #              choices = tr("types", l),
-    #              selected = input$filtro_tipo %||% tr("types", l)[1]),
-    h4(tr("it_params", l)),
-    
-    # --- Only visible when NOT editing ---
-    conditionalPanel(
-      condition = "!input.allow_edit_process",
-      checkboxInput("ver_todas", tr("show_all", l), value = FALSE),
-      checkboxInput("show_hotels_on_map", tr("show_hotels_map", l), value = TRUE),
-      h4(tr("stage_detail", l)),
-      selectInput("filtro_tipo", tr("filter_by", l),
-                  choices = tr("types", l),
-                  selected = tr("types", l)[1])
-    ),
-    
-    # --- Always visible ---
-    checkboxInput("allow_edit_process", tr("allow_edit", l), value = FALSE),
-    
-      tags$hr(),
-      h4(tr("save_changes", l)),
-      textInput("www_filename_proc", tr("file_name", l), value = input$www_filename_proc %||% "itinerary_view"),
-      checkboxInput("overwrite_www_proc", tr("overwrite", l), value = isTRUE(input$overwrite_www_proc)),
-      actionButton("save_places_proc", tr("save_to_www", l), class = "btn-warning w-100"),
-      
-      br(), br(),
-      helpText(tr("tip_edit", l))
-    )
-  })
-  
   output$tip_edit_text <- renderText(tr("tip_edit", lang()))
   
   # Load: local and www
@@ -856,6 +1038,10 @@ server <- function(input, output, session) {
     td <- read_trip_data(input$proc_trip_file$datapath)
     trip_data(td)
     showNotification(tr("notice_loaded", lang()), type = "message")
+    warn_if_no_info(td)
+    if (is.null(td$info) || !nrow(td$info)) {
+      showNotification(tr("warn_no_info", lang()), type = "warning")
+    }
   })
   observe({
     l <- lang()
@@ -872,6 +1058,7 @@ server <- function(input, output, session) {
       if (!inherits(td, "try-error")) {
         trip_data(td)
         showNotification(paste0(tr("notice_loaded_default", lang()), files[1]), type = "message")
+        warn_if_no_info(td)
       } else {
         showNotification(tr("err_read_default", lang()), type = "error")
       }
@@ -896,45 +1083,100 @@ server <- function(input, output, session) {
     }
     trip_data(td)
     showNotification(paste0("✅ ", tr("load_sel", l), ": ", input$proc_trip_www), type = "message")
+    warn_if_no_info(td)
+    if (is.null(td$info) || !nrow(td$info)) {
+      showNotification(tr("warn_no_info", lang()), type = "warning")
+    }
   })
   
   # --- Wikipedia + Geocode helpers ---
-  wikipedia_missing <- function(places_df, lang_api = "es") {
+  wikipedia_missing <- function(places_df, lang = "es") {
     if (!"wikipedia" %in% names(places_df)) places_df$wikipedia <- NA_character_
     needs_wiki <- is.na(places_df$wikipedia) | places_df$wikipedia == ""
     if (!any(needs_wiki) || !"ciudad" %in% names(places_df)) return(places_df)
-    qvec <- places_df$ciudad[needs_wiki]
-    fetch_wiki <- function(q) {
-      url <- paste0("https://", lang_api, ".wikipedia.org/w/api.php")
-      req <- httr2::request(url) |>
-        httr2::req_url_query(action = "opensearch", search = q, limit = 1, namespace = 0, format = "json") |>
-        httr2::req_user_agent("itinerario-app/1.0 (contact: you@example.com)")
-      resp <- try(httr2::req_perform(req), silent = TRUE)
-      if (inherits(resp, "try-error")) return(NA_character_)
-      js <- try(httr2::resp_body_json(resp, simplifyVector = TRUE), silent = TRUE)
-      if (inherits(js, "try-error")) return(NA_character_)
-      if (length(js) >= 4 && length(js[[4]]) >= 1) return(js[[4]][1])
-      NA_character_
+    
+    # Best query: city + country if available (disambiguate)
+    qvec <- if ("pais" %in% names(places_df)) {
+      paste(places_df$ciudad[needs_wiki], places_df$pais[needs_wiki], sep = ", ")
+    } else {
+      places_df$ciudad[needs_wiki]
     }
-    places_df$wikipedia[needs_wiki] <- vapply(qvec, fetch_wiki, FUN.VALUE = character(1))
+    
+    places_df$wikipedia[needs_wiki] <- vapply(
+      qvec,
+      function(q) fetch_wiki(q, lang = lang),
+      FUN.VALUE = character(1)
+    )
     places_df
   }
-  geocode_one <- function(query) {
-    out <- try(tmaptools::geocode_OSM(query, as.data.frame = TRUE), silent = TRUE)
-    if (inherits(out, "try-error") || is.null(out)) return(c(NA_real_, NA_real_))
-    if (inherits(out, "sf")) {
-      coords <- sf::st_coordinates(out); return(c(coords[1,"X"], coords[1,"Y"]))
+  
+  
+  # --- NEW: geocoder with strict timeout (Nominative) ---
+  geo_nominatim <- function(query, tmo = 4) {
+    if (is.null(query) || !nzchar(query)) return(c(NA_real_, NA_real_))
+    
+    req <- httr2::request("https://nominatim.openstreetmap.org/search") |>
+      httr2::req_url_query(q = query, format = "jsonv2", limit = 1, addressdetails = 0) |>
+      httr2::req_user_agent("geoitinr/1.0 (contact: you@example.com)") |>
+      httr2::req_timeout(tmo) |>
+      httr2::req_retry(max_tries = 2)
+    
+    resp <- try(httr2::req_perform(req), silent = TRUE)
+    if (inherits(resp, "try-error")) return(c(NA_real_, NA_real_))
+    
+    # IMPORTANT: don't simplify -> stable list of lists
+    js <- try(httr2::resp_body_json(resp, simplifyVector = FALSE), silent = TRUE)
+    if (inherits(js, "try-error") || is.null(js) || length(js) < 1) return(c(NA_real_, NA_real_))
+    
+    # Typical case: list of objects (each object is a list with "lon"/"lat")
+    rec <- js[[1]]
+    
+    # 1) If it came as a list: access with [[ ]]
+    if (is.list(rec)) {
+      lon_chr <- rec[["lon"]]; lat_chr <- rec[["lat"]]
+      lon <- suppressWarnings(as.numeric(if (length(lon_chr)) lon_chr[[1]] else NA))
+      lat <- suppressWarnings(as.numeric(if (length(lat_chr)) lat_chr[[1]] else NA))
+      return(c(lon %||% NA_real_, lat %||% NA_real_))
     }
-    if (all(c("lon","lat") %in% names(out))) return(c(out$lon[1], out$lat[1]))
-    if (all(c("coords.x1","coords.x2") %in% names(out))) return(c(out$coords.x1[1], out$coords.x2[1]))
-    if (all(c("x","y") %in% names(out))) return(c(out$x[1], out$y[1]))
+    
+    # 2) Fallback if httr2 returned a data.frame despite the simplifyVector = FALSE
+    if (is.data.frame(js) && nrow(js) >= 1 && all(c("lon","lat") %in% names(js))) {
+      lon <- suppressWarnings(as.numeric(js$lon[1])); 
+      lat <- suppressWarnings(as.numeric(js$lat[1]))
+      return(c(lon %||% NA_real_, lat %||% NA_real_))
+    }
+    
+    # 3) Last attempt: if rec was an atomic vector with numbers
+    if (is.atomic(rec) && !is.null(names(rec)) && all(c("lon","lat") %in% names(rec))) {
+      lon <- suppressWarnings(as.numeric(rec[["lon"]]))
+      lat <- suppressWarnings(as.numeric(rec[["lat"]]))
+      return(c(lon %||% NA_real_, lat %||% NA_real_))
+    }
+    
     c(NA_real_, NA_real_)
   }
+  
+  
+  geocode_one <- function(query) {
+    # first: Nominatim with timeout
+    coords <- geo_nominatim(query, tmo = 4)
+    if (!is.na(coords[1]) && !is.na(coords[2])) return(coords)
+    # very short fallback (just in case)
+    out <- try(tmaptools::geocode_OSM(query, as.data.frame = TRUE), silent = TRUE)
+    if (!inherits(out, "try-error") && !is.null(out)) {
+      if (all(c("lon","lat") %in% names(out)))    return(c(out$lon[1], out$lat[1]))
+      if (all(c("coords.x1","coords.x2") %in% names(out))) return(c(out$coords.x1[1], out$coords.x2[1]))
+      if (all(c("x","y") %in% names(out))) return(c(out$x[1], out$y[1]))
+    }
+    c(NA_real_, NA_real_)
+  }
+  
   geocode_missing <- function(df, default_country = NULL) {
     if (!all(c("ciudad","lat","lon") %in% names(df))) return(df)
     if (!"wikipedia" %in% names(df)) df$wikipedia <- NA_character_
     need_idx <- which(is.na(df$lat) | is.na(df$lon))
     if (!length(need_idx)) return(df)
+    
     withProgress(message = tr("ed_geo_places", lang()), value = 0, {
       clean_city <- function(x) {
         x <- trimws(as.character(x))
@@ -944,22 +1186,23 @@ server <- function(input, output, session) {
       ciudad_clean <- vapply(df$ciudad, clean_city, FUN.VALUE = "")
       pais_orig <- if ("pais" %in% names(df)) as.character(df$pais) else rep(NA_character_, nrow(df))
       pais_final <- ifelse(is.na(pais_orig) | pais_orig=="", default_country, pais_orig)
-      q_full <- ifelse(!is.na(pais_final) & nzchar(pais_final), paste(ciudad_clean, pais_final, sep = ", "), ciudad_clean)
-      queries <- tibble::tibble(query = q_full[need_idx])
-      res_bulk <- try(geo(queries, address = query, method = "osm", lat = latitude, long = longitude, limit = 1, verbose = FALSE), silent = TRUE)
-      if (!inherits(res_bulk, "try-error") && is.data.frame(res_bulk) && nrow(res_bulk) == length(need_idx)) {
-        df$lat[need_idx] <- res_bulk$latitude; df$lon[need_idx] <- res_bulk$longitude
-      }
-      still_idx <- which(is.na(df$lat) | is.na(df$lon))
-      if (length(still_idx)) {
-        for (i in still_idx) {
-          coords <- geocode_one(q_full[i]); df$lon[i] <- coords[1]; df$lat[i] <- coords[2]
-          incProgress(1/length(still_idx)); Sys.sleep(0.05)
-        }
+      q_full <- ifelse(!is.na(pais_final) & nzchar(pais_final),
+                       paste(ciudad_clean, pais_final, sep = ", "), ciudad_clean)
+      
+      n <- length(need_idx)
+      for (k in seq_along(need_idx)) {
+        i <- need_idx[k]
+        coords <- geo_nominatim(q_full[i], tmo = 4)
+        df$lon[i] <- coords[1]; df$lat[i] <- coords[2]
+        incProgress(1/n)
+        Sys.sleep(0.05)
       }
     })
-    df$lat <- suppressWarnings(as.numeric(df$lat)); df$lon <- suppressWarnings(as.numeric(df$lon)); df
+    df$lat <- suppressWarnings(as.numeric(df$lat))
+    df$lon <- suppressWarnings(as.numeric(df$lon))
+    df
   }
+  
   fill_missing_hotel_coords <- function(h, places_df = NULL) {
     if (is.null(h) || !nrow(h)) return(h)
     for (nm in c("hotel_lat","hotel_lon")) if (!nm %in% names(h)) h[[nm]] <- NA_real_
@@ -983,44 +1226,130 @@ server <- function(input, output, session) {
     })
     h$hotel_lat <- as.numeric(h$hotel_lat); h$hotel_lon <- as.numeric(h$hotel_lon); h
   }
+  
+  # --- POI: geocode using 'city' (not 'city') and with small alias of cities ---
   geocode_interes_missing <- function(h) {
     if (is.null(h) || !nrow(h)) return(h)
-    for (nm in c("descriptor","ciutat","pais","lat","lon")) if (!nm %in% names(h)) h[[nm]] <- NA
+    for (nm in c("descriptor","ciudad","pais","lat","lon")) if (!nm %in% names(h)) h[[nm]] <- NA
     need_idx <- which(is.na(h$lat) | is.na(h$lon))
     if (!length(need_idx)) return(h)
+    
     withProgress(message = tr("ed_geo_interest", lang()), value = 0, {
+      norm_city <- function(x) {
+        x <- trimws(as.character(x))
+        if (!nzchar(x)) return(x)
+      }
       for (i in need_idx) {
-        q <- paste(na.omit(c(h$descriptor[i], h$ciutat[i], h$pais[i])), collapse = ", ")
-        coords <- geocode_one(q); h$lon[i] <- coords[1]; h$lat[i] <- coords[2]
+        city <- norm_city(h$ciudad[i])
+        q  <- paste(na.omit(c(h$descriptor[i], city, h$pais[i])), collapse = ", ")
+        cr <- geocode_one(q)
+        # fallback: only descriptor + city
+        if (is.na(cr[1]) || is.na(cr[2])) {
+          q2 <- paste(na.omit(c(h$descriptor[i], city)), collapse = ", ")
+          cr <- geocode_one(q2)
+        }
+        h$lon[i] <- cr[1]; h$lat[i] <- cr[2]
         incProgress(1/length(need_idx)); Sys.sleep(0.05)
       }
     })
     h$lat <- as.numeric(h$lat); h$lon <- as.numeric(h$lon); h
   }
-  interes_link_missing <- function(inter_df, lang_api = "es") {
+  
+  # --- Hotels: try to complete hotel_link (Wikipedia opensearch 'number + city + hotel') ---
+  # HOTELS: Wikipedia only; OSM disabled by default
+  hotel_link_missing <- function(h, places_df = NULL, wiki_lang = "es",
+                                 per_item_timeout = 2, total_budget_s = 12,
+                                 use_osm_fallback = TRUE) {
+    if (is.null(h) || !nrow(h)) return(h)
+    if (!"hotel_link" %in% names(h)) h$hotel_link <- NA_character_
+    need <- which(is.na(h$hotel_link) | h$hotel_link == "")
+    if (!length(need)) return(h)
+    
+    city_by_id <- if (!is.null(places_df) && all(c("place_id","ciudad","pais") %in% names(places_df))) {
+      list(city  = setNames(as.character(places_df$ciudad), places_df$place_id),
+           country = setNames(as.character(places_df$pais),   places_df$place_id))
+    } else NULL
+    
+    seen <- new.env(parent = emptyenv())  # <— cache local
+    deadline <- Sys.time() + total_budget_s
+    for (i in need) {
+      if (Sys.time() > deadline) break
+      nm  <- as.character(h$hotel_name[i] %||% "")
+      pid <- as.character(h$place_id[i] %||% "")
+      city <- if (!is.null(city_by_id)) city_by_id$city[[pid]] else NA_character_
+      ctry <- if (!is.null(city_by_id)) city_by_id$country[[pid]] else NA_character_
+      lat <- suppressWarnings(as.numeric(h$hotel_lat[i]))
+      lon <- suppressWarnings(as.numeric(h$hotel_lon[i]))
+      
+      key <- paste(norm_str(nm), norm_str(city), round(lat,4), round(lon,4), sep="|")
+      if (exists(key, envir = seen, inherits = FALSE)) {
+        h$hotel_link[i] <- get(key, envir = seen); next
+      }
+      
+      url <- best_wiki_link(nm, city = city, country = ctry,
+                            lat = lat, lon = lon, lang = wiki_lang,
+                            type = "hotel", per_item_timeout = per_item_timeout,
+                            budget_left = as.numeric(difftime(deadline, Sys.time(), units="secs")))
+      
+      if ((is.na(url) || !nzchar(url)) && isTRUE(use_osm_fallback) &&
+          !is.na(lat) && !is.na(lon)) {
+        url <- try(find_osm_url_near(lat, lon, name = nm, restrict_hotels = TRUE,
+                                     radius_m = 150, timeout_s = per_item_timeout),
+                   silent = TRUE)
+        if (inherits(url, "try-error")) url <- NA_character_
+      }
+      
+      if (!is.na(url) && nzchar(url)) h$hotel_link[i] <- url
+      assign(key, h$hotel_link[i] %||% NA_character_, envir = seen)
+      Sys.sleep(0.03)
+    }
+    h
+  }
+  
+  interes_link_missing <- function(inter_df, wiki_lang = "es",
+                                   per_item_timeout = 3, total_budget_s = 18,
+                                   use_osm_fallback = TRUE) {
     h <- inter_df
     if (is.null(h) || !nrow(h)) return(h)
     if (!"link" %in% names(h)) h$link <- NA_character_
-    need <- is.na(h$link) | h$link == ""
-    if (!any(need)) return(h)
-    fetch_wiki <- function(q) {
-      url <- paste0("https://", lang_api, ".wikipedia.org/w/api.php")
-      req <- httr2::request(url) |>
-        httr2::req_url_query(action = "opensearch", search = q, limit = 1, namespace = 0, format = "json") |>
-        httr2::req_user_agent("itinerario-app/1.0 (contact: you@example.com)")
-      resp <- try(httr2::req_perform(req), silent = TRUE)
-      if (inherits(resp, "try-error")) return(NA_character_)
-      js <- try(httr2::resp_body_json(resp, simplifyVector = TRUE), silent = TRUE)
-      if (inherits(js, "try-error")) return(NA_character_)
-      if (length(js) >= 4 && length(js[[4]]) >= 1) return(js[[4]][1])
-      NA_character_
+    need <- which(is.na(h$link) | h$link == "")
+    if (!length(need)) return(h)
+    
+    seen <- new.env(parent = emptyenv())  # <— cache local
+    deadline <- Sys.time() + total_budget_s
+    for (i in need) {
+      if (Sys.time() > deadline) break
+      nm   <- as.character(h$descriptor[i] %||% "")
+      city <- as.character(h$ciudad[i]    %||% "")
+      ctry <- as.character(h$pais[i]      %||% "")
+      lat  <- suppressWarnings(as.numeric(h$lat[i]))
+      lon  <- suppressWarnings(as.numeric(h$lon[i]))
+      
+      key <- paste(norm_str(nm), norm_str(city), round(lat,4), round(lon,4), sep="|")
+      if (exists(key, envir = seen, inherits = FALSE)) {
+        h$link[i] <- get(key, envir = seen); next
+      }
+      
+      url <- best_wiki_link(nm, city = city, country = ctry,
+                            lat = lat, lon = lon, lang = wiki_lang,
+                            type = "poi", per_item_timeout = per_item_timeout,
+                            budget_left = as.numeric(difftime(deadline, Sys.time(), units="secs")))
+      
+      if ((is.na(url) || !nzchar(url)) && isTRUE(use_osm_fallback) &&
+          !is.na(lat) && !is.na(lon)) {
+        url <- try(find_osm_url_near(lat, lon, name = nm, restrict_hotels = FALSE,
+                                     radius_m = 180, timeout_s = per_item_timeout),
+                   silent = TRUE)
+        if (inherits(url, "try-error")) url <- NA_character_
+      }
+      
+      if (!is.na(url) && nzchar(url)) h$link[i] <- url
+      assign(key, h$link[i] %||% NA_character_, envir = seen)
+      Sys.sleep(0.03)
     }
-    qvec <- paste(na.omit(h$descriptor[need]),
-                  ifelse(is.na(h$ciudad[need]), "", h$ciudad[need]),
-                  ifelse(is.na(h$pais[need]), "", h$pais[need]))
-    h$link[need] <- vapply(qvec, fetch_wiki, FUN.VALUE = character(1))
     h
   }
+  
   
   # Dates parse + expand
   .norm_months <- function(s) {
@@ -1081,9 +1410,50 @@ server <- function(input, output, session) {
   # Expanded stages per day
   etapas_exp <- reactive({
     td <- current_td(); req(td)
-    places <- td$places; stages <- td$stages
     
-    if ("medi" %in% names(stages)) names(stages)[names(stages) == "medi"] <- "modo"
+    places <- td$places
+    stages <- td$stages
+    
+    # --- 1) Very defensive standardization of 'stages' ---
+    if (is.null(stages)) stages <- tibble::tibble()
+    
+    if (!is.data.frame(stages)) {
+      # It came as a vector (date included) -> we convert it into a tibble with a 'date' column
+      if (inherits(stages, "Date") || is.atomic(stages)) {
+        stages <- tibble::tibble(date = stages)
+      } else {
+        stages <- tibble::as_tibble(stages)
+      }
+    } else {
+      stages <- tibble::as_tibble(stages)
+    }
+    
+    # Ensure unique numbers so dplyr doesn't fail
+    names(stages) <- make.unique(names(stages), sep = "__dup")
+    
+    # Ensure minimum columns
+    req_cols <- c("etapa","from_id","to_id","date","description","medi","ruta","modo")
+    for (nm in req_cols) if (!nm %in% names(stages)) stages[[nm]] <- NA
+    
+    # Resolve medium/mode conflict without duplicating numbers
+    if ("medi" %in% names(stages) && "modo" %in% names(stages)) {
+      stages$modo <- dplyr::coalesce(
+        as.character(stages$modo),
+        as.character(stages$medi)
+      )
+      stages$medi <- NULL
+    } else if ("medi" %in% names(stages) && !"modo" %in% names(stages)) {
+      names(stages)[names(stages) == "medi"] <- "modo"
+    }
+    if (!"modo" %in% names(stages)) stages$modo <- NA_character_
+    
+    # If empty, return tibble with column 'day' and 0 rows
+    if (!nrow(stages)) {
+      out <- dplyr::mutate(stages, dia = as.Date(character()))
+      return(out[0, ])
+    }
+    
+    # --- 2) Normalized mode of transport ---
     stages$modo <- tolower(trimws(as.character(stages$modo)))
     stages$modo <- dplyr::case_when(
       stages$modo %in% c("vol","flight","avion","avió","plane","vuelo") ~ "vol",
@@ -1092,17 +1462,26 @@ server <- function(input, output, session) {
       stages$modo %in% c("vaixell","barco","ferry","ship","boat") ~ "vaixell",
       TRUE ~ "cotxe"
     )
-    same_place <- stages$from_id == stages$to_id
-    stages$modo[same_place] <- "visita"
+    same_place <- (as.character(stages$from_id) == as.character(stages$to_id))
+    stages$modo[same_place %in% TRUE] <- "visita"
     
+    # --- 3) Expand date and enrich ---
     stages %>%
-      mutate(dia_list = lapply(date, .expand_fecha, year = 2025)) %>%
-      tidyr::unnest(dplyr::all_of("dia_list"), names_repair = "minimal") %>%
-      rename(dia = dia_list) %>%
-      left_join(places %>% select(place_id, ciudad_from = ciudad, lat_from = lat, lon_from = lon), by = c("from_id" = "place_id")) %>%
-      left_join(places %>% select(place_id, ciudad_to   = ciudad, lat_to   = lat, lon_to   = lon, wikipedia), by = c("to_id"   = "place_id")) %>%
-      arrange(etapa, dia)
+      dplyr::mutate(dia_list = lapply(date, .expand_fecha, year = 2025)) %>%
+      tidyr::unnest(cols = c(dia_list), names_repair = "minimal") %>%
+      dplyr::rename(dia = dia_list) %>%
+      dplyr::left_join(
+        places %>% dplyr::select(place_id, ciudad_from = ciudad, lat_from = lat, lon_from = lon),
+        by = c("from_id" = "place_id")
+      ) %>%
+      dplyr::left_join(
+        places %>% dplyr::select(place_id, ciudad_to = ciudad, lat_to = lat, lon_to = lon, wikipedia),
+        by = c("to_id" = "place_id")
+      ) %>%
+      dplyr::arrange(etapa, dia)
   })
+  
+  
   
   # Datepicker language mapping
   datepicker_lang <- reactive({
@@ -1440,6 +1819,7 @@ server <- function(input, output, session) {
   output$tab_interest_title <- renderText(tr("interest_tab", lang()))
   output$hotel_title        <- renderText(tr("hotel", lang()))
   output$poi_title          <- renderText(tr("places_interest", lang()))
+  output$tab_info_title <- renderText(tr("btn_info", lang()))
   
   # ---------- Panels ----------
   output$detalle_etapa <- renderUI({
@@ -1557,11 +1937,60 @@ server <- function(input, output, session) {
   register_edit("stages_table",  "stages",  "stages_table")
   register_edit("interes_table", "interes", "interes_table")
   register_edit("hotels_table",  "hotels",  "hotels_table")
+  register_edit("info_table", "info", "info_table")
+  output$places_table  <- DT::renderDT({ td <- current_td(); req(td);  df <- td$places;  if (is.null(df)) df <- data.frame();  DT::datatable(df,selection =  if (isTRUE(input$allow_edit_process)) "multiple" else "none", editable  = isTRUE(input$allow_edit_process),options   = list(pageLength = 8))})
+  output$stages_table  <- DT::renderDT({ td <- current_td(); req(td);  df <- td$stages;  if (is.null(df)) df <- data.frame();  DT::datatable(df,selection =  if (isTRUE(input$allow_edit_process)) "multiple" else "none", editable  = isTRUE(input$allow_edit_process),options   = list(pageLength = 8))})
+  output$hotels_table  <- DT::renderDT({ td <- current_td(); req(td);  df <- td$hotels;  if (is.null(df)) df <- data.frame();  DT::datatable(df,selection =  if (isTRUE(input$allow_edit_process)) "multiple" else "none", editable  = isTRUE(input$allow_edit_process),options   = list(pageLength = 8))})
+  output$interes_table  <- DT::renderDT({ td <- current_td(); req(td);  df <- td$interes;  if (is.null(df)) df <- data.frame(); DT::datatable(df,selection =  if (isTRUE(input$allow_edit_process)) "multiple" else "none", editable  = isTRUE(input$allow_edit_process),options   = list(pageLength = 8))})
+#  output$info_table  <- DT::renderDT({ td <- current_td(); req(td);  df <- td$info;  if (is.null(df)) df <- data.frame(); DT::datatable(df,selection =  if (isTRUE(input$allow_edit_process)) "multiple" else "none", editable  = isTRUE(input$allow_edit_process),options   = list(pageLength = 8))})
+  output$info_table <- DT::renderDT({td <- current_td(); req(td)
+    wide <- info_to_wide_lang(td$info, lang())
+    DT::datatable(
+      wide,
+      selection = if (isTRUE(input$allow_edit_process)) "multiple" else "none",
+      editable  = if (isTRUE(input$allow_edit_process)) list(target="cell", disable=list(columns=c(0))) else FALSE,
+      options   = list(pageLength = 8)
+    )
+  })
   
-  output$places_table  <- DT::renderDT({ td <- current_td(); req(td); df <- td$places;  if (is.null(df)) df <- data.frame(); DT::datatable(df, selection = if (isTRUE(input$allow_edit_process)) "multiple" else "none"); DT::datatable(df, editable = isTRUE(input$allow_edit_process), options = list(pageLength = 8)) })
-  output$stages_table  <- DT::renderDT({ td <- current_td(); req(td); df <- td$stages;  if (is.null(df)) df <- data.frame(); DT::datatable(df, selection = if (isTRUE(input$allow_edit_process)) "multiple" else "none"); DT::datatable(df, editable = isTRUE(input$allow_edit_process), options = list(pageLength = 8)) })
-  output$hotels_table  <- DT::renderDT({ td <- current_td(); req(td); df <- td$hotels;  if (is.null(df)) df <- data.frame(); DT::datatable(df, selection = if (isTRUE(input$allow_edit_process)) "multiple" else "none"); DT::datatable(df, editable = isTRUE(input$allow_edit_process), options = list(pageLength = 8)) })
-  output$interes_table <- DT::renderDT({ td <- current_td(); req(td); df <- td$interes; if (is.null(df)) df <- data.frame(); DT::datatable(df, selection = if (isTRUE(input$allow_edit_process)) "multiple" else "none"); DT::datatable(df, editable = isTRUE(input$allow_edit_process), options = list(pageLength = 8)) })
+  observeEvent(input$info_table_cell_edit, {
+    info <- input$info_table_cell_edit
+    td <- trip_data(); req(td)
+    
+    # Reconstruct the wide table as seen on the screen (to map row/column)
+    wide <- info_to_wide_lang(td$info, lang())
+    # Column edited
+    colname <- names(wide)[info$col]
+    # Si intentan editar 'country' (col 1), ignoramos
+    if (identical(colname, "country")) return()
+    
+    # Country (row)
+    cty   <- wide$country[info$row]
+    field <- toupper(colname)  # DOCUMENTATION, LOCAL_TIME, ...
+    
+    # Language column to be updated in the tidy
+    lcode <- switch(lang(), "es"="es", "ca"="ca", "en"="en", "en")
+    
+    # Make sure the tidy row (country + field) exists
+    idx <- which(toupper(td$info$field) == field & td$info$country == cty)
+    if (!length(idx)) {
+      td$info <- rbind(td$info, data.frame(
+        country = cty, field = field,
+        en = NA_character_, es = NA_character_, ca = NA_character_,
+        stringsAsFactors = FALSE
+      ))
+      idx <- nrow(td$info)
+    }
+    
+    # Applies the new value to the active language
+    td$info[idx, lcode] <- as.character(info$value)
+    
+    # Save in memory and refresh the wide view
+    trip_data(td)
+    DT::replaceData(DT::dataTableProxy("info_table"),
+                    info_to_wide_lang(td$info, lang()),
+                    resetPaging = FALSE, rownames = FALSE)
+  })
   
   # ---------- Write to www/ ----------
   write_trip_to_www <- function(td, base_name, overwrite = FALSE, select_after = TRUE) {
@@ -1603,31 +2032,38 @@ server <- function(input, output, session) {
       interes_out <- inter %>% dplyr::select(descriptor, ciudad, pais, lat, lon, tipus, link, observacio)
     }
     
+    info_out <- NULL
+    if (!is.null(td$info) && nrow(td$info)) info_out <- info_to_wide(td$info)
+    
     dir.create("www", showWarnings = FALSE, recursive = TRUE)
-    base_name <- trimws(base_name %||% "")
-    if (!nzchar(base_name)) base_name <- paste0("itinerary_", Sys.Date())
-    base_name <- gsub("[^[:alnum:]_\\x2D ]+", "_", base_name)
-    fname <- paste0(base_name, ".xlsx")
-    save_path <- file.path("www", fname)
+    base_name <- gsub("[^[:alnum:]_\\x2D ]+", "_", trimws(base_name %||% paste0("itinerary_", Sys.Date())))
+    save_path <- file.path("www", paste0(base_name, ".xlsx"))
     
     if (file.exists(save_path) && !isTRUE(overwrite)) {
-      showNotification(tr("warn_exists", lang()), type = "warning", duration = 6)
-      return(invisible(FALSE))
+      showNotification(tr("warn_exists", lang()), type = "warning", duration = 6); return(invisible(FALSE))
     }
     
     ok <- TRUE; err_msg <- NULL
     tryCatch({
-      writexl::write_xlsx(Filter(Negate(is.null), list(
-        places = places_out, stages = stages_out, hotels = hotels_out, interes = interes_out
-      )), path = save_path)
+      writexl::write_xlsx(
+        Filter(Negate(is.null), list(
+          places  = places_out,
+          stages  = stages_out,
+          hotels  = hotels_out,
+          interes = interes_out,
+          info    = info_out
+        )),
+        path = save_path
+      )
     }, error = function(e) { ok <<- FALSE; err_msg <<- e$message })
     
     if (ok) {
-      showNotification(paste0(tr("saved_www", lang()), fname), type = "message", duration = 6)
+      showNotification(paste0(tr("saved_www", lang()), basename(save_path)), type = "message", duration = 6)
       files <- list_www_xlsx()
       updateSelectInput(session, "proc_trip_www",
                         choices = c(tr("none", lang()), files),
-                        selected = fname)
+                        selected = basename(save_path)
+      )
     } else {
       showNotification(paste0(tr("err_write_www", lang()), err_msg), type = "error", duration = 10)
     }
@@ -1654,28 +2090,53 @@ server <- function(input, output, session) {
   
   observeEvent(input$show_info, {
     l <- lang()
+    td <- current_td()
+    
+    make_block <- function(country, tbl, lcode) {
+      # guard + pick language column
+      if (is.null(tbl) || !nrow(tbl)) return(NULL)
+      col <- switch(lcode, "es"="es","ca"="ca","en"="en","en")
+      if (!col %in% names(tbl)) return(NULL)
+      
+      # normalize for matching
+      fld  <- toupper(trimws(as.character(tbl$field)))
+      ctry <- trimws(as.character(tbl$country))
+      
+      pick <- function(field_name) {
+        idx <- which(fld == toupper(field_name) & ctry == country)
+        if (!length(idx)) return(NULL)
+        vals <- tbl[idx, col, drop = TRUE]
+        vals <- vals[!is.na(vals) & nzchar(as.character(vals))]
+        if (!length(vals)) return(NULL)
+        as.character(vals[1])
+      }
+      
+      fields <- c("DOCUMENTATION","LOCAL_TIME","LANGUAGE","INTERNET","PLUGS","CURRENCY")
+      items <- lapply(fields, function(f) {
+        val <- pick(f)
+        if (!is.null(val)) paste0("<li><strong>", f, ":</strong> ",
+                                  htmltools::htmlEscape(val), "</li>")
+      })
+      items <- Filter(Negate(is.null), items)
+      if (!length(items)) return(NULL)
+      
+      paste0("<h4><strong>", htmltools::htmlEscape(country),
+             "</strong></h4><ul>", paste(items, collapse=""), "</ul>")
+    }
+    
+    html_body <- NULL
+    if (!is.null(td$info) && nrow(td$info)) {
+      # Render all countries present
+      countries <- unique(td$info$country)
+      blocks <- lapply(countries, function(cty) make_block(cty, td$info, l))
+      blocks <- Filter(Negate(is.null), blocks)
+      if (length(blocks)) html_body <- paste(blocks, collapse = "")
+    }
+    
     showModal(modalDialog(
-      title = tr("info_modal_title", l), size = "l", easyClose = TRUE, footer = modalButton(tr("close", l)),
-      HTML(paste0(
-        "<h4><strong>", tr("ar_title", l), "</strong></h4>",
-        "<ul>",
-        "<li><strong>", tr("docu", l), ":</strong> UE: passport, return ticket, and funds. Stay < 90 days without visa. Declare perishable food.</li>",
-        "<li><strong>", tr("local_time", l), ":</strong> GMT −3.</li>",
-        "<li><strong>", tr("language", l), ":</strong> Spanish; English in tourist areas.</li>",
-        "<li><strong>", tr("internet", l), ":</strong> Widespread Wi-Fi; local SIM/eSIM available.</li>",
-        "<li><strong>", tr("plugs", l), ":</strong> Type C & I.</li>",
-        "<li><strong>", tr("currency", l), ":</strong> ARS. Check rates before travel.</li>",
-        "</ul>",
-        "<h4><strong>", tr("cl_title", l), "</strong></h4>",
-        "<ul>",
-        "<li><strong>", tr("docu", l), ":</strong> UE: no visa < 90 days. Declare perishable food.</li>",
-        "<li><strong>", tr("local_time", l), ":</strong> GMT −4 (continental).</li>",
-        "<li><strong>", tr("language", l), ":</strong> Spanish; English in tourist hubs.</li>",
-        "<li><strong>", tr("internet", l), ":</strong> Widespread Wi-Fi; local SIM/eSIM available.</li>",
-        "<li><strong>", tr("plugs", l), ":</strong> Type C. 220 V.</li>",
-        "<li><strong>", tr("currency", l), ":</strong> CLP. Check rates before travel.</li>",
-        "</ul>"
-      ))
+      title = tr("info_modal_title", l),
+      size = "l", easyClose = TRUE, footer = modalButton(tr("close", l)),
+      HTML(html_body)
     ))
   })
   
@@ -1720,161 +2181,7 @@ server <- function(input, output, session) {
       actionButton("wiki_fill_sel", lab("ed_wiki_fill_sel"), class = "btn btn-secondary w-100")
     )
   })
-  
-  # ---- Wikipedia URL fill (opensearch) ----
-  wikipedia_missing <- function(places_df, lang = "es") {
-    if (!"wikipedia" %in% names(places_df)) places_df$wikipedia <- NA_character_
-    needs_wiki <- is.na(places_df$wikipedia) | places_df$wikipedia == ""
-    if (!any(needs_wiki) || !"ciudad" %in% names(places_df)) return(places_df)
-    qvec <- places_df$ciudad[needs_wiki]
-    fetch_wiki <- function(q) {
-      url <- paste0("https://", lang, ".wikipedia.org/w/api.php")
-      req <- httr2::request(url) |>
-        httr2::req_url_query(action="opensearch", search=q, limit=1, namespace=0, format="json") |>
-        httr2::req_user_agent("itinerario-app/1.0 (contact: you@example.com)")
-      resp <- try(httr2::req_perform(req), silent=TRUE)
-      if (inherits(resp,"try-error")) return(NA_character_)
-      js <- try(httr2::resp_body_json(resp, simplifyVector = TRUE), silent=TRUE)
-      if (inherits(js,"try-error")) return(NA_character_)
-      if (length(js) >= 4 && length(js[[4]]) >= 1) return(js[[4]][1])
-      NA_character_
-    }
-    places_df$wikipedia[needs_wiki] <- vapply(qvec, fetch_wiki, FUN.VALUE = character(1))
-    places_df
-  }
-  
-  # ---- Robust single-query OSM geocode (works with different return shapes) ----
-  geocode_one <- function(query) {
-    out <- try(geocode_OSM(query, as.data.frame = TRUE), silent = TRUE)
-    if (inherits(out, "try-error") || is.null(out)) return(c(NA_real_, NA_real_))
-    if (inherits(out, "sf")) {
-      coords <- sf::st_coordinates(out)
-      return(c(coords[1,"X"], coords[1,"Y"]))
-    }
-    if (all(c("lon","lat") %in% names(out))) return(c(out$lon[1], out$lat[1]))
-    if (all(c("coords.x1","coords.x2") %in% names(out))) return(c(out$coords.x1[1], out$coords.x2[1]))
-    if (all(c("x","y") %in% names(out))) return(c(out$x[1], out$y[1]))
-    c(NA_real_, NA_real_)
-  }
-  
-  # ---- Bulk-first geocode for places (fallback to single queries) ----
-  geocode_missing <- function(df, default_country = NULL) {
-    if (!all(c("ciudad","lat","lon") %in% names(df))) return(df)
-    if (!"wikipedia" %in% names(df)) df$wikipedia <- NA_character_
-    need_idx <- which(is.na(df$lat) | is.na(df$lon))
-    if (!length(need_idx)) return(df)
-    
-    withProgress(message = "Geocodificant llocs…", value = 0, {
-      clean_city <- function(x) {
-        x <- trimws(as.character(x))
-        x <- sub(" -.*$", "", x); x <- sub(":.*$", "", x)
-        x <- sub("/.*$", "", x);  x <- sub(",.*$", "", x); x
-      }
-      ciudad_clean <- vapply(df$ciudad, clean_city, FUN.VALUE = "")
-      pais_orig <- if ("pais" %in% names(df)) as.character(df$pais) else rep(NA_character_, nrow(df))
-      pais_final <- ifelse(is.na(pais_orig) | pais_orig=="", default_country, pais_orig)
-      q_full <- ifelse(!is.na(pais_final) & nzchar(pais_final),
-                       paste(ciudad_clean, pais_final, sep = ", "), ciudad_clean)
-      
-      # bulk via tidygeocoder
-      queries <- tibble::tibble(query = q_full[need_idx])
-      res_bulk <- try(
-        geo(queries, address = query, method = "osm", lat = latitude, long = longitude, limit = 1, verbose = FALSE),
-        silent = TRUE
-      )
-      if (!inherits(res_bulk, "try-error") && is.data.frame(res_bulk) && nrow(res_bulk) == length(need_idx)) {
-        df$lat[need_idx] <- res_bulk$latitude
-        df$lon[need_idx] <- res_bulk$longitude
-      }
-      
-      still_idx <- which(is.na(df$lat) | is.na(df$lon))
-      if (length(still_idx)) {
-        for (i in still_idx) {
-          coords <- geocode_one(q_full[i])
-          df$lon[i] <- coords[1]; df$lat[i] <- coords[2]
-          incProgress(1/length(still_idx))
-          Sys.sleep(0.1)
-        }
-      }
-    })
-    df$lat <- suppressWarnings(as.numeric(df$lat))
-    df$lon <- suppressWarnings(as.numeric(df$lon))
-    df
-  }
-  
-  fill_missing_hotel_coords <- function(h, places_df = NULL) {
-    if (is.null(h) || !nrow(h)) return(h)
-    for (nm in c("hotel_lat","hotel_lon")) if (!nm %in% names(h)) h[[nm]] <- NA_real_
-    need_idx <- which(is.na(h$hotel_lat) | is.na(h$hotel_lon))
-    if (!length(need_idx)) return(h)
-    
-    withProgress(message = "Geolocalitzant hotels…", value = 0, {
-      city_by_id <- country_by_id <- NULL
-      if (!is.null(places_df) && all(c("place_id","ciudad","pais") %in% names(places_df))) {
-        city_by_id    <- setNames(as.character(places_df$ciudad), places_df$place_id)
-        country_by_id <- setNames(as.character(places_df$pais),   places_df$place_id)
-      }
-      for (i in need_idx) {
-        name <- if ("hotel_name" %in% names(h)) as.character(h$hotel_name[i]) else NA_character_
-        pid  <- if ("place_id"   %in% names(h)) as.character(h$place_id[i])   else NA_character_
-        parts <- list(name)
-        if (!is.null(city_by_id) && !is.na(pid) && nzchar(pid)) parts <- c(parts, city_by_id[[pid]], country_by_id[[pid]])
-        q <- paste(na.omit(parts), collapse = ", ")
-        coords <- geocode_one(q)
-        h$hotel_lon[i] <- coords[1]; h$hotel_lat[i] <- coords[2]
-        incProgress(1/length(need_idx))
-        Sys.sleep(0.1)
-      }
-    })
-    h$hotel_lat <- as.numeric(h$hotel_lat)
-    h$hotel_lon <- as.numeric(h$hotel_lon)
-    h
-  }
-  
-  geocode_interes_missing <- function(h) {
-    if (is.null(h) || !nrow(h)) return(h)
-    for (nm in c("descriptor","ciutat","pais","lat","lon")) if (!nm %in% names(h)) h[[nm]] <- NA
-    need_idx <- which(is.na(h$lat) | is.na(h$lon))
-    if (!length(need_idx)) return(h)
-    
-    withProgress(message = "Geolocalitzant punts d'interès…", value = 0, {
-      for (i in need_idx) {
-        q <- paste(na.omit(c(h$descriptor[i], h$ciutat[i], h$pais[i])), collapse = ", ")
-        coords <- geocode_one(q)
-        h$lon[i] <- coords[1]; h$lat[i] <- coords[2]
-        incProgress(1/length(need_idx))
-        Sys.sleep(0.1)
-      }
-    })
-    h$lat <- as.numeric(h$lat); h$lon <- as.numeric(h$lon)
-    h
-  }
-  
-  interes_link_missing <- function(inter_df, lang = "es") {
-    h <- inter_df
-    if (is.null(h) || !nrow(h)) return(h)
-    if (!"link" %in% names(h)) h$link <- NA_character_
-    need <- is.na(h$link) | h$link == ""
-    if (!any(need)) return(h)
-    fetch_wiki <- function(q) {
-      url <- paste0("https://", lang, ".wikipedia.org/w/api.php")
-      req <- httr2::request(url) |>
-        httr2::req_url_query(action="opensearch", search=q, limit=1, namespace=0, format="json") |>
-        httr2::req_user_agent("itinerario-app/1.0 (contact: you@example.com)")
-      resp <- try(httr2::req_perform(req), silent=TRUE)
-      if (inherits(resp,"try-error")) return(NA_character_)
-      js <- try(httr2::resp_body_json(resp, simplifyVector = TRUE), silent=TRUE)
-      if (inherits(js,"try-error")) return(NA_character_)
-      if (length(js) >= 4 && length(js[[4]]) >= 1) return(js[[4]][1])
-      NA_character_
-    }
-    qvec <- paste(na.omit(h$descriptor[need]),
-                  ifelse(is.na(h$ciudad[need]), "", h$ciudad[need]),
-                  ifelse(is.na(h$pais[need]),   "", h$pais[need]))
-    h$link[need] <- vapply(qvec, fetch_wiki, FUN.VALUE = character(1))
-    h
-  }
-  
+
   # Keep a reference to the active dataset setters/getters (your app may already have trip_data() etc.)
   get_td <- reactive(trip_data())
   set_td  <- function(td) trip_data(td)
@@ -1910,9 +2217,7 @@ server <- function(input, output, session) {
   observeEvent(input$auto_complete, {
     req(isTRUE(input$allow_edit_process))
     td <- get_td(); req(td)
-    
-    shinybusy::show_modal_spinner(spin="fading-circle", color="#007BFF",
-                                  text = tr("ed_working", lang()))
+    shinybusy::show_modal_spinner(spin="fading-circle", color="#007BFF", text = tr("ed_working", lang()))
     on.exit(shinybusy::remove_modal_spinner(), add = TRUE)
     
     withProgress(message = tr("ed_auto_progress", lang()), value = 0, {
@@ -1920,47 +2225,40 @@ server <- function(input, output, session) {
       places1 <- geocode_missing(td$places, default_country = NULL)
       
       incProgress(0.5, detail = tr("ed_wiki_places", lang()))
-      # pick wiki language from UI language, but fallback CA->ES
       wiki_lang <- switch(lang(), "en"="en","es"="es","ca"="es","en")
       places2 <- wikipedia_missing(places1, lang = wiki_lang)
       
       hotels_out <- td$hotels
       if (!is.null(hotels_out) && nrow(hotels_out)) {
-        incProgress(0.75, detail = tr("ed_geo_hotels", lang()))
-        for (nm in c("hotel_lat","hotel_lon","hotel_link"))
-          if (!nm %in% names(hotels_out)) hotels_out[[nm]] <- if (nm %in% c("hotel_lat","hotel_lon")) NA_real_ else NA_character_
         hotels_out <- fill_missing_hotel_coords(hotels_out, places2)
+        hotels_out <- hotel_link_missing(hotels_out, places_df = places2, wiki_lang = wiki_lang,
+                                         use_osm_fallback = F)
       }
       
       inter_out <- td$interes
       if (!is.null(inter_out) && nrow(inter_out)) {
-        incProgress(0.9, detail = tr("ed_geo_interest", lang()))
         inter_out <- geocode_interes_missing(inter_out)
-        incProgress(0.95, detail = tr("ed_wiki_interest", lang()))
-        inter_out <- interes_link_missing(inter_out, lang = wiki_lang)
+        inter_out <- interes_link_missing(inter_out, wiki_lang = wiki_lang,
+                                          use_osm_fallback = F)
       }
       
       set_td(modifyList(td, list(places = places2, hotels = hotels_out, interes = inter_out)))
       incProgress(1, detail = tr("done", lang()))
     })
     
-    # Refresh Places & Hotels & Interest tables if they’re visible
     isolate({
       td2 <- get_td()
       DT::replaceData(DT::dataTableProxy("places_table"),  td2$places, resetPaging = FALSE)
-      if (!is.null(td2$hotels))
-        DT::replaceData(DT::dataTableProxy("hotels_table"), td2$hotels, resetPaging = FALSE)
-      if (!is.null(td2$interes))
-        DT::replaceData(DT::dataTableProxy("interes_table"), td2$interes, resetPaging = FALSE)
+      if (!is.null(td2$hotels))  DT::replaceData(DT::dataTableProxy("hotels_table"),  td2$hotels,  resetPaging = FALSE)
+      if (!is.null(td2$interes)) DT::replaceData(DT::dataTableProxy("interes_table"), td2$interes, resetPaging = FALSE)
     })
-    
-    # Repaint map layers (you already have redraw_map(); otherwise call leafletProxy logic)
-    redraw_map(do_zoom = FALSE)
+    redraw_map(FALSE)
     
     n_geo_after  <- sum(is.na(get_td()$places$lat) | is.na(get_td()$places$lon))
     n_wiki_after <- sum(is.na(get_td()$places$wikipedia) | get_td()$places$wikipedia == "")
     showNotification(tr("ed_done", lang(), list(geo = n_geo_after, wiki = n_wiki_after)), type = "message", duration = 6)
   })
+  
   
   # 4.b Geocode only selected places
   observeEvent(input$geo_fill_sel, {
@@ -2000,6 +2298,481 @@ server <- function(input, output, session) {
     redraw_map(FALSE)
     showNotification(tr("ed_manual_done", lang()), type = "message")
   })
+  
+ # Helpers OSM (bbox + extracción de URL) 
+  fetch_wiki <- function(q, lang = "es", tmo = 3) {
+    if (is.null(q) || !nzchar(q)) return(NA_character_)
+    url <- paste0("https://", lang, ".wikipedia.org/w/api.php")
+    req <- httr2::request(url) |>
+      httr2::req_url_query(action = "opensearch", search = q, limit = 1, namespace = 0, format = "json") |>
+      httr2::req_user_agent("geoitinr/1.0 (contact: you@example.com)") |>
+      httr2::req_timeout(tmo) |>
+      httr2::req_retry(max_tries = 2)
+    resp <- try(httr2::req_perform(req), silent = TRUE)
+    if (inherits(resp, "try-error")) return(NA_character_)
+    js <- try(httr2::resp_body_json(resp, simplifyVector = TRUE), silent = TRUE)
+    if (inherits(js, "try-error")) return(NA_character_)
+    if (length(js) >= 4 && length(js[[4]]) >= 1) return(js[[4]][1])
+    NA_character_
+  }
+  
+  bbox_around <- function(lat, lon, radius_m = 250) {
+    dlat <- radius_m / 111320; dlon <- radius_m / (111320 * cos(lat * pi/180))
+    c(lon - dlon, lat - dlat, lon + dlon, lat + dlat)
+  }
+  first_nonempty <- function(...) {
+    xx <- unlist(list(...)); xx <- xx[!is.na(xx) & nzchar(as.character(xx))]
+    if (length(xx)) as.character(xx[1]) else NA_character_
+  }
+  osm_pick_url <- function(attrs) {
+    nm <- names(attrs)
+    w   <- if ("website"         %in% nm) attrs[["website"]]         else NA
+    cw  <- if ("contact:website" %in% nm) attrs[["contact:website"]] else NA
+    url <- if ("url"             %in% nm) attrs[["url"]]             else NA
+    cu  <- if ("contact:url"     %in% nm) attrs[["contact:url"]]     else NA
+    out <- first_nonempty(w, cw, url, cu)
+    if (!is.na(out)) return(out)
+    wp  <- if ("wikipedia" %in% nm) attrs[["wikipedia"]] else NA
+    if (!is.na(wp) && nzchar(wp) && grepl(":", wp, fixed = TRUE)) {
+      parts <- strsplit(wp, ":", fixed = TRUE)[[1]]
+      return(paste0("https://", parts[1], ".wikipedia.org/wiki/",
+                    utils::URLencode(parts[2], reserved = TRUE)))
+    }
+    wd  <- if ("wikidata" %in% nm) attrs[["wikidata"]] else NA
+    if (!is.na(wd) && nzchar(wd)) return(paste0("https://www.wikidata.org/wiki/", wd))
+    NA_character_
+  }
+  collect_osm_candidates <- function(res, lat, lon) {
+    layers <- list(res$osm_points, res$osm_polygons, res$osm_multipolygons, res$osm_lines)
+    layers <- Filter(function(x) !is.null(x) && nrow(x) > 0, layers)
+    if (!length(layers)) return(NULL)
+    out <- list()
+    ref_pt <- sf::st_sfc(sf::st_point(c(lon, lat)), crs = 4326)
+    for (x in layers) {
+      g <- sf::st_geometry(x); if (length(g) == 0) next
+      ctr <- suppressWarnings(sf::st_centroid(g))
+      d   <- try(as.numeric(sf::st_distance(ctr, ref_pt)), silent = TRUE)
+      if (inherits(d, "try-error") || length(d) != nrow(x)) d <- rep(Inf, nrow(x))
+      attrs <- sf::st_drop_geometry(x); attrs$..dist <- d
+      out[[length(out) + 1]] <- attrs
+    }
+    if (!length(out)) return(NULL)
+    cand <- do.call(rbind, out)
+    cand <- cand[order(cand$..dist), , drop = FALSE]
+    head(cand, 80)
+  }
+  find_osm_url_near <- function(lat, lon, name = NULL, restrict_hotels = FALSE,
+                                radius_m = 250, timeout_s = 6) {
+    if (is.na(lat) || is.na(lon)) return(NA_character_)
+    bb <- bbox_around(lat, lon, radius_m)
+    try_layer <- function(qobj) {
+      res <- try(osmdata::osmdata_sf(qobj), silent = TRUE)
+      if (inherits(res, "try-error")) return(NULL)
+      collect_osm_candidates(res, lat, lon)
+    }
+    q <- osmdata::opq(bbox = bb, timeout = timeout_s)
+    cand <- NULL
+    if (!is.null(name) && nzchar(name)) {
+      cand <- try_layer(osmdata::add_osm_feature(q, key = "name", value = name, value_exact = FALSE, match_case = FALSE))
+    }
+    if (is.null(cand) && isTRUE(restrict_hotels)) {
+      cand <- try_layer(osmdata::add_osm_feature(q, key = "tourism", value = c("hotel","hostel","guest_house"), value_exact = TRUE))
+      if (is.null(cand)) cand <- try_layer(osmdata::add_osm_feature(q, key = "amenity", value = c("hotel"), value_exact = TRUE))
+    }
+    if (is.null(cand) && !isTRUE(restrict_hotels)) {
+      keys <- list(
+        list("tourism", c("museum","gallery","attraction")),
+        list("amenity", c("place_of_worship")),
+        list("historic", c("monument","heritage","yes")),
+        list("building", c("cathedral","church"))
+      )
+      for (kv in keys) {
+        cand <- try_layer(osmdata::add_osm_feature(q, key = kv[[1]], value = kv[[2]], value_exact = TRUE))
+        if (!is.null(cand)) break
+      }
+    }
+    if (is.null(cand) || !nrow(cand)) return(NA_character_)
+    for (i in seq_len(nrow(cand))) {
+      url <- osm_pick_url(as.list(cand[i, , drop = FALSE]))
+      if (!is.na(url) && nzchar(url)) return(url)
+    }
+    NA_character_
+  }
+  
+  # ---------------- Wikipedia/Wikidata helpers ----------------
+  norm_str <- function(s) {
+    s <- tolower(trimws(as.character(s %||% "")))
+    s <- iconv(s, to="ASCII//TRANSLIT")           # quita acentos
+    s <- gsub("[^[:alnum:] ]+", " ", s)
+    s <- gsub("\\s+", " ", s)
+    trimws(s)
+  }
+  sim_ratio <- function(a,b) {
+    a <- norm_str(a); b <- norm_str(b)
+    if (!nzchar(a) || !nzchar(b)) return(0)
+    ad <- utils::adist(a,b, ignore.case = TRUE)
+    1 - (ad / max(nchar(a), nchar(b)))
+  }
+  
+  # Minimal useful aliases (you can expand)
+  expand_aliases <- function(name, type = c("poi","hotel"), city = NULL) {
+    type <- match.arg(type)
+    base <- unique(c(name))
+    n <- norm_str(name); cty <- norm_str(city)
+    unique(base)
+  }
+  
+  wiki_url_build <- function(lang, title) {
+    if (!nzchar(title)) return(NA_character_)
+    paste0("https://", lang, ".wikipedia.org/wiki/",
+           utils::URLencode(title, reserved = TRUE))
+  }
+  
+  wiki_opensearch_urls <- function(lang, query, limit = 3, tmo = 3) {
+    if (!nzchar(query)) return(character(0))
+    url <- paste0("https://", lang, ".wikipedia.org/w/api.php")
+    req <- httr2::request(url) |>
+      httr2::req_url_query(action="opensearch", search=query, limit=limit,
+                           namespace=0, format="json") |>
+      httr2::req_timeout(tmo) |>
+      httr2::req_retry(max_tries = 2)
+    resp <- try(httr2::req_perform(req), silent = TRUE)
+    if (inherits(resp, "try-error")) return(character(0))
+    js <- try(httr2::resp_body_json(resp, simplifyVector = TRUE), silent = TRUE)
+    if (inherits(js, "try-error") || length(js) < 4) return(character(0))
+    as.character(js[[4]] %||% character(0))
+  }
+  
+  wiki_geosearch <- function(lang, lat, lon, radius = 150, limit = 15, tmo = 3) {
+    if (is.na(lat) || is.na(lon)) return(data.frame())
+    url <- paste0("https://", lang, ".wikipedia.org/w/api.php")
+    req <- httr2::request(url) |>
+      httr2::req_url_query(
+        action="query", list="geosearch",
+        gscoord=paste0(lat,"|",lon),
+        gsradius=radius, gslimit=limit, format="json"
+      ) |>
+      httr2::req_timeout(tmo) |>
+      httr2::req_retry(max_tries = 2)
+    resp <- try(httr2::req_perform(req), silent = TRUE)
+    if (inherits(resp, "try-error")) return(data.frame())
+    js <- try(httr2::resp_body_json(resp, simplifyVector = TRUE), silent = TRUE)
+    if (inherits(js, "try-error")) return(data.frame())
+    items <- try(js$query$geosearch, silent = TRUE)
+    if (inherits(items, "try-error") || is.null(items) || !nrow(as.data.frame(items))) return(data.frame())
+    df <- as.data.frame(items)
+    df$url <- vapply(df$title, function(t) wiki_url_build(lang, t), character(1))
+    df
+  }
+  
+  wikidata_search_qids <- function(query, language = "en", limit = 5, tmo = 3) {
+    if (!nzchar(query)) return(character(0))
+    url <- "https://www.wikidata.org/w/api.php"
+    req <- httr2::request(url) |>
+      httr2::req_url_query(action="wbsearchentities", format="json",
+                           language=language, search=query, type="item", limit=limit) |>
+      httr2::req_timeout(tmo) |>
+      httr2::req_retry(max_tries = 2)
+    resp <- try(httr2::req_perform(req), silent = TRUE)
+    if (inherits(resp, "try-error")) return(character(0))
+    js <- try(httr2::resp_body_json(resp, simplifyVector = TRUE), silent = TRUE)
+    if (inherits(js, "try-error")) return(character(0))
+    hits <- js$search
+    if (is.null(hits) || !length(hits)) return(character(0))
+    unique(vapply(hits, function(x) as.character(x$id %||% ""), character(1)))
+  }
+  
+  wikidata_sitelink_url <- function(qid, langs = c("es","en","it","ca"), tmo = 3) {
+    if (is.null(qid) || !nzchar(qid)) return(NA_character_)
+    url <- "https://www.wikidata.org/w/api.php"
+    req <- httr2::request(url) |>
+      httr2::req_url_query(action="wbgetentities", format="json",
+                           ids=qid, props="sitelinks/urls") |>
+      httr2::req_timeout(tmo) |>
+      httr2::req_retry(max_tries = 2)
+    resp <- try(httr2::req_perform(req), silent = TRUE)
+    if (inherits(resp, "try-error")) return(NA_character_)
+    js <- try(httr2::resp_body_json(resp, simplifyVector = TRUE), silent = TRUE)
+    if (inherits(js, "try-error")) return(NA_character_)
+    ent <- js$entities[[qid]]
+    if (is.null(ent) || is.null(ent$sitelinks)) return(NA_character_)
+    for (lg in langs) {
+      key <- paste0(lg, "wiki")
+      if (!is.null(ent$sitelinks[[key]]$url)) return(ent$sitelinks[[key]]$url)
+    }
+    # if not in those languages, returns the first one available
+    sl <- ent$sitelinks
+    if (length(sl)) return(as.character(sl[[1]]$url %||% NA_character_))
+    NA_character_
+  }
+  
+  # --- Normalization/alias/distance helpers ---
+  `%||%` <- function(x, y) if (is.null(x) || length(x) == 0) y else x
+  
+  norm_str <- function(x){
+    x <- tolower(trimws(as.character(x)))
+    x <- iconv(x, to = "ASCII//TRANSLIT")
+    gsub("[^a-z0-9]+"," ", x)
+  }
+  
+  city_aliases <- function(city){
+    if (is.null(city) || !nzchar(city)) return(character(0))
+    cty <- tolower(trimws(as.character(city)))
+    unique(c(cty, norm_str(cty)))
+  }
+  
+  haversine_km <- function(lat1, lon1, lat2, lon2){
+    if (any(is.na(c(lat1,lon1,lat2,lon2)))) return(Inf)
+    R <- 6371
+    dlat <- (lat2-lat1)*pi/180
+    dlon <- (lon2-lon1)*pi/180
+    a <- sin(dlat/2)^2 + cos(lat1*pi/180)*cos(lat2*pi/180)*sin(dlon/2)^2
+    R*2*atan2(sqrt(a), sqrt(1-a))
+  }
+  
+  # --- Safe wrappers for Wikipedia searches ---
+  safe_geosearch <- function(lat, lon, lang="es", radius=250, limit=12, tmo=4){
+    if (is.na(lat) || is.na(lon)) return(list())
+    url <- paste0("https://", lang, ".wikipedia.org/w/api.php")
+    req <- httr2::request(url) |>
+      httr2::req_url_query(
+        action="query", list="geosearch", format="json",
+        gscoord=paste0(lat, "|", lon), gsradius=radius, gslimit=limit
+      ) |>
+      httr2::req_timeout(tmo) |>
+      httr2::req_retry(max_tries = 2)
+    resp <- try(httr2::req_perform(req), silent=TRUE)
+    if (inherits(resp,"try-error")) return(list())
+    js <- try(httr2::resp_body_json(resp, simplifyVector = FALSE), silent=TRUE)
+    if (inherits(js,"try-error")) return(list())
+    gs <- try(js$query$geosearch, silent=TRUE)
+    if (inherits(gs,"try-error") || is.null(gs)) return(list())
+    # Devuelve siempre lista de listas {pageid,title}
+    out <- lapply(gs, function(x){
+      list(pageid = suppressWarnings(as.integer(x$pageid %||% NA)),
+           title  = as.character(x$title %||% ""))
+    })
+    # Filter candidates without title
+    Filter(function(x) is.list(x) && nzchar(x$title %||% ""), out)
+  }
+  
+  safe_opensearch <- function(q, lang="es", limit=10, tmo=4){
+    if (is.null(q) || !nzchar(q)) return(list())
+    url <- paste0("https://", lang, ".wikipedia.org/w/api.php")
+    req <- httr2::request(url) |>
+      httr2::req_url_query(action="opensearch", search=q, limit=limit, namespace=0, format="json") |>
+      httr2::req_timeout(tmo) |>
+      httr2::req_retry(max_tries = 2)
+    resp <- try(httr2::req_perform(req), silent=TRUE)
+    if (inherits(resp,"try-error")) return(list())
+    js <- try(httr2::resp_body_json(resp, simplifyVector = FALSE), silent=TRUE)
+    if (inherits(js,"try-error") || length(js) < 4) return(list())
+    titles <- try(unlist(js[[2]]), silent=TRUE)
+    urls   <- try(unlist(js[[4]]), silent=TRUE)
+    if (inherits(titles,"try-error") || length(titles)==0) return(list())
+    if (inherits(urls,"try-error")) urls <- character(length(titles))
+    out <- lapply(seq_along(titles), function(i){
+      list(pageid = NA_integer_, title = as.character(titles[i] %||% ""),
+           url    = as.character(urls[i]   %||% ""))
+    })
+    Filter(function(x) is.list(x) && nzchar(x$title %||% ""), out)
+  }
+  
+  # --- Page metadata (coords + categories + disambiguation) ---
+  wiki_page_meta <- function(pageids, lang="es"){
+    pageids <- unique(na.omit(as.integer(pageids)))
+    if (!length(pageids)) return(list())
+    url <- paste0("https://", lang, ".wikipedia.org/w/api.php")
+    req <- httr2::request(url) |>
+      httr2::req_url_query(
+        action="query", format="json",
+        prop="pageprops|coordinates|categories",
+        ppprop="disambiguation|wikibase_item",
+        cllimit=50, clshow="!hidden",
+        pageids=paste(pageids, collapse="|")
+      ) |>
+      httr2::req_user_agent("geoitinr/1.0") |>
+      httr2::req_timeout(5) |>
+      httr2::req_retry(max_tries = 2)
+    resp <- try(httr2::req_perform(req), silent=TRUE)
+    if (inherits(resp,"try-error")) return(list())
+    js <- try(httr2::resp_body_json(resp, simplifyVector = FALSE), silent=TRUE)
+    if (inherits(js,"try-error")) return(list())
+    pages <- try(js$query$pages, silent=TRUE)
+    if (inherits(pages,"try-error") || is.null(pages)) return(list())
+    
+    # 'pages' is a list named by pageid; convert it into a simple list
+    lst <- unname(pages)
+    out <- lapply(lst, function(p){
+      # p can be either a list or a data frame; we handle both.
+      get1 <- function(obj, nm) { tryCatch(obj[[nm]], error=function(e) NULL) }
+      title <- as.character(get1(p, "title") %||% "")
+      pp    <- get1(p, "pageprops")
+      is_dis <- FALSE
+      if (is.list(pp)) is_dis <- !is.null(pp$disambiguation)
+      
+      # coords can be a list of lists or a data.frame
+      lat <- lon <- NA_real_
+      coords <- get1(p, "coordinates")
+      if (!is.null(coords)) {
+        if (is.data.frame(coords)) {
+          lat <- suppressWarnings(as.numeric(coords$lat[1] %||% NA))
+          lon <- suppressWarnings(as.numeric(coords$lon[1] %||% NA))
+        } else if (is.list(coords) && length(coords)) {
+          c1 <- coords[[1]]
+          lat <- suppressWarnings(as.numeric((c1$lat) %||% NA))
+          lon <- suppressWarnings(as.numeric((c1$lon) %||% NA))
+        }
+      }
+      
+      cats <- character(0)
+      cl <- get1(p, "categories")
+      if (!is.null(cl)) {
+        if (is.data.frame(cl)) cats <- as.character(cl$title)
+        else if (is.list(cl)) cats <- vapply(cl, function(x) as.character(x$title %||% ""), "")
+        cats <- cats[nzchar(cats)]
+      }
+      
+      pid <- suppressWarnings(as.integer(p$pageid %||% NA))
+      list(pageid = pid, title = title, is_disambig = is_dis,
+           lat = lat, lon = lon, categories = cats)
+    })
+    
+    # indexed by pageid for fast lookup
+    names(out) <- vapply(out, function(x) as.character(x$pageid %||% NA), "")
+    out
+  }
+  
+  # --- Ranking with city/country/distance --
+  rank_candidates <- function(cands, meta, city=NULL, country=NULL, ref_lat=NA_real_, ref_lon=NA_real_){
+    if (!length(cands)) return(NULL)
+    city_toks <- city_aliases(city)
+    sc <- vapply(seq_along(cands), function(i){
+      cand <- cands[[i]]
+      # save: cand must be listed with $title/$pageid
+      if (!is.list(cand)) return(-1e6)
+      ti <- as.character(cand$title %||% "")
+      if (!nzchar(ti)) return(-1e6)
+      pid <- suppressWarnings(as.integer(cand$pageid %||% NA))
+      m <- if (!is.na(pid) && length(meta) && as.character(pid) %in% names(meta)) meta[[as.character(pid)]] else NULL
+      
+      s <- 0
+      # Penalizes disambiguation
+      if (is.list(m) && isTRUE(m$is_disambig)) s <- s - 100
+      
+      # Title contains city/alias
+      tt <- norm_str(ti)
+      if (length(city_toks) && any(nchar(city_toks) > 0) &&
+          any(vapply(city_toks, function(tok) grepl(paste0("\\b",tok,"\\b"), tt), logical(1))))
+        s <- s + 6
+      
+      # Title contains country
+      if (!is.null(country) && nzchar(country)) {
+        if (grepl(paste0("\\b", norm_str(country), "\\b"), tt)) s <- s + 2
+      }
+      
+      # Categories with the city
+      if (is.list(m) && length(m$categories)) {
+        cats_norm <- norm_str(paste(m$categories, collapse=" "))
+        if (length(city_toks) &&
+            any(vapply(city_toks, function(tok) grepl(paste0("\\b",tok,"\\b"), cats_norm), logical(1))))
+          s <- s + 5
+      }
+      
+      # Distance to ref (if there are page coords)
+      if (is.list(m) && !is.na(m$lat) && !is.na(ref_lat)) {
+        dk <- haversine_km(ref_lat, ref_lon, m$lat, m$lon)
+        if (is.finite(dk)) {
+          if (dk <= 0.25)      s <- s + 10
+          else if (dk <= 0.6)  s <- s + 6
+          else if (dk <= 1.5)  s <- s + 3
+          else if (dk <= 5)    s <- s + 1
+          else                 s <- s - 6
+        }
+      }
+      s
+    }, numeric(1))
+    ord <- order(sc, decreasing = TRUE, na.last = TRUE)
+    list(order = ord, score = sc)
+  }
+  
+  # --- BEST: use geosearch + opensearch + meta + ranking robust ---
+  best_wiki_link <- function(name, city = NULL, country = NULL,
+                             lat = NA_real_, lon = NA_real_,
+                             lang = "es", type = c("poi","hotel"),
+                             per_item_timeout = 4, budget_left = 8){
+    
+    type <- match.arg(type)
+    if (is.null(name) || !nzchar(name)) return(NA_character_)
+    
+    # 1) Geosearch (if coords)
+    cand_geo  <- safe_geosearch(lat, lon, lang = lang, radius = 250, limit = 12, tmo = per_item_timeout)
+    
+    # 2) Text (name + city + country)
+    qtext <- paste(name, city, country)
+    cand_text <- safe_opensearch(qtext, lang = lang, limit = 10, tmo = per_item_timeout)
+    
+    #3) Join candidates and filter non-list objects
+    all_cand <- c(cand_geo, cand_text)
+    all_cand <- Filter(function(x) is.list(x) && nzchar(as.character(x$title %||% "")), all_cand)
+    if (!length(all_cand)) return(NA_character_)
+    
+    # 4) Deduplicate by normalized title
+    titles_norm <- vapply(all_cand, function(x) norm_str(x$title %||% ""), "")
+    keep <- !duplicated(titles_norm)
+    all_cand <- all_cand[keep]
+    all_cand <- head(all_cand, 12)
+    
+    # 5) Meta by pageid (those who have it)
+    ids <- suppressWarnings(as.integer(na.omit(vapply(all_cand, function(x) x$pageid %||% NA_integer_, integer(1)))))
+    meta <- wiki_page_meta(ids, lang = lang)
+    
+    # 6) Ranking
+    rk <- rank_candidates(all_cand, meta, city = city, country = country, ref_lat = lat, ref_lon = lon)
+    if (is.null(rk)) return(NA_character_)
+    best <- all_cand[[ rk$order[1] ]]
+    
+    # 7) final Link
+    if (!is.null(best$url) && nzchar(best$url)) {
+      return(best$url)
+    } else if (nzchar(best$title)) {
+      return(paste0("https://", lang, ".wikipedia.org/wiki/",
+                    utils::URLencode(gsub(" ", "_", best$title), reserved=TRUE)))
+    }
+    NA_character_
+  }
+  
+  
+  # ---- High-level cache to avoid repeating identical searches ----
+  .cache_best_link <- new.env(parent = emptyenv())
+  
+  best_wiki_link <- local({
+    .orig <- best_wiki_link  ## save the current version
+    
+    function(name, city = NULL, country = NULL,
+             lat = NA_real_, lon = NA_real_,
+             lang = "es", type = c("poi","hotel"),
+             per_item_timeout = 2, budget_left = 6) {
+      
+      type <- match.arg(type)
+      key <- paste(
+        norm_str(name), norm_str(city), norm_str(country),
+        round(lat, 4), round(lon, 4), lang, type,
+        sep = "|"
+      )
+      
+      if (exists(key, envir = .cache_best_link, inherits = FALSE)) {
+        return(get(key, envir = .cache_best_link))
+      }
+      
+      url <- .orig(name, city, country, lat, lon, lang, type,
+                   per_item_timeout, budget_left)
+      
+      assign(key, url, envir = .cache_best_link)
+      url
+    }
+  })
+  
   
 }
 
